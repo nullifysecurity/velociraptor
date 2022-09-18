@@ -1,6 +1,6 @@
 /*
-   Velociraptor - Hunting Evil
-   Copyright (C) 2019 Velocidex Innovations.
+   Velociraptor - Dig Deeper
+   Copyright (C) 2019-2022 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -37,9 +37,17 @@ var (
 	client            = app.Command("client", "Run the velociraptor client")
 	client_quiet_flag = client.Flag("quiet",
 		"Do not output anything to stdout/stderr").Bool()
+	client_admin_flag = client.Flag("require_admin", "Ensure the user is an admin").Bool()
 )
 
 func doClient() error {
+	if *client_admin_flag {
+		err := checkAdmin()
+		if err != nil {
+			return err
+		}
+	}
+
 	ctx, cancel := install_sig_handler()
 	defer cancel()
 
@@ -126,7 +134,7 @@ func runClientOnce(
 	}
 
 	sm, err := startup.StartClientServices(ctx, config_obj, exe, on_error)
-	sm.Close()
+	defer sm.Close()
 	if err != nil {
 		return err
 	}

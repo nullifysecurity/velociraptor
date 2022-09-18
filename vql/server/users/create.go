@@ -5,9 +5,11 @@ import (
 	"crypto/rand"
 
 	"github.com/Velocidex/ordereddict"
+	"github.com/sirupsen/logrus"
 	"www.velocidex.com/golang/velociraptor/acls"
 	"www.velocidex.com/golang/velociraptor/api/authenticators"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
+	"www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/services/users"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
@@ -49,7 +51,7 @@ func (self UserCreateFunction) Call(
 	}
 
 	users_manager := services.GetUserManager()
-	user_record, err := users_manager.GetUserWithHashes(arg.Username)
+	user_record, err := users_manager.GetUserWithHashes(ctx, arg.Username)
 	if err == services.UserNotFoundError {
 		// OK - Lets make the user now
 		user_record, err = users.NewUserRecord(arg.Username)
@@ -147,11 +149,20 @@ func (self UserCreateFunction) Call(
 	}
 
 	// Write the user record.
-	err = users_manager.SetUser(user_record)
+	err = users_manager.SetUser(ctx, user_record)
 	if err != nil {
 		scope.Log("user_create: %s", err)
 		return vfilter.Null{}
 	}
+
+	principal := vql_subsystem.GetPrincipal(scope)
+	logger := logging.GetLogger(config_obj, &logging.Audit)
+	logger.WithFields(logrus.Fields{
+		"Username":  arg.Username,
+		"Roles":     arg.Roles,
+		"OrgIds":    arg.OrgIds,
+		"Principal": principal,
+	}).Info("user_create")
 
 	return arg.Username
 }

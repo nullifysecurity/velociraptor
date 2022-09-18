@@ -1,6 +1,6 @@
 /*
-   Velociraptor - Hunting Evil
-   Copyright (C) 2019 Velocidex Innovations.
+   Velociraptor - Dig Deeper
+   Copyright (C) 2019-2022 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -32,21 +32,25 @@ var (
 )
 
 type UserManager interface {
-	SetUser(user_record *api_proto.VelociraptorUser) error
-	GetUser(username string) (*api_proto.VelociraptorUser, error)
+	SetUser(ctx context.Context,
+		user_record *api_proto.VelociraptorUser) error
+	GetUser(ctx context.Context,
+		username string) (*api_proto.VelociraptorUser, error)
 
-	ListUsers() ([]*api_proto.VelociraptorUser, error)
+	ListUsers(ctx context.Context) ([]*api_proto.VelociraptorUser, error)
 	GetUserFromContext(ctx context.Context) (
 		*api_proto.VelociraptorUser, *config_proto.Config, error)
 
-	GetUserWithHashes(username string) (*api_proto.VelociraptorUser, error)
-	SetUserOptions(username string,
+	GetUserWithHashes(ctx context.Context, username string) (*api_proto.VelociraptorUser, error)
+	SetUserOptions(ctx context.Context, username string,
 		options *api_proto.SetGUIOptionsRequest) error
-	GetUserOptions(username string) (*api_proto.SetGUIOptionsRequest, error)
+	GetUserOptions(ctx context.Context, username string) (*api_proto.SetGUIOptionsRequest, error)
 
 	// Favorites are stored per org.
-	GetFavorites(config_obj *config_proto.Config,
+	GetFavorites(ctx context.Context, config_obj *config_proto.Config,
 		principal, fav_type string) (*api_proto.Favorites, error)
+
+	DeleteUser(ctx context.Context, config_obj *config_proto.Config, username string) error
 }
 
 func RegisterUserManager(dispatcher UserManager) {

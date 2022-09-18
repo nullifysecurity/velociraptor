@@ -1,6 +1,6 @@
 /*
-   Velociraptor - Hunting Evil
-   Copyright (C) 2019 Velocidex Innovations.
+   Velociraptor - Dig Deeper
+   Copyright (C) 2019-2022 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	VERSION                    = "0.6.6-dev"
+	VERSION                    = "0.6.7-dev"
 	ENROLLMENT_WELL_KNOWN_FLOW = "E:Enrol"
 	MONITORING_WELL_KNOWN_FLOW = FLOW_PREFIX + "Monitoring"
 
@@ -90,5 +90,6 @@ type key int
 
 var (
 	HuntIdRegex    = regexp.MustCompile(`^H\.[^.]+$`)
+	ClientIdRegex  = regexp.MustCompile(`^C\.[^\./ ]+$`)
 	STOP_ITERATION = errors.New("Stop Iteration")
 )

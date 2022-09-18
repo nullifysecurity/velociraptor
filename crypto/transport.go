@@ -1,6 +1,6 @@
 /*
-   Velociraptor - Hunting Evil
-   Copyright (C) 2019 Velocidex Innovations.
+   Velociraptor - Dig Deeper
+   Copyright (C) 2019-2022 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -26,7 +26,7 @@ type ICryptoManager interface {
 	GetCSR() ([]byte, error)
 	Encrypt(compressed_message_lists [][]byte,
 		compression crypto_proto.PackedMessageList_CompressionType,
-		destination string) ([]byte, error)
+		nonce, destination string) ([]byte, error)
 	Decrypt(cipher_text []byte) (*MessageInfo, error)
 }
 

@@ -1,12 +1,17 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
 
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
+)
+
+const (
+	ROOT_ORG_ID = "root"
 )
 
 var (
@@ -61,6 +66,7 @@ type OrgManager interface {
 	CreateNewOrg(name, id string) (*api_proto.OrgRecord, error)
 	ListOrgs() []*api_proto.OrgRecord
 	GetOrg(org_id string) (*api_proto.OrgRecord, error)
+	DeleteOrg(ctx context.Context, org_id string) error
 
 	// The manager is responsible for running multiple services - one
 	// for each org. This ensures org services are separated out and

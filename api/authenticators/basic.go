@@ -6,7 +6,6 @@ import (
 
 	"github.com/gorilla/csrf"
 	"github.com/sirupsen/logrus"
-	"www.velocidex.com/golang/velociraptor/acls"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/constants"
@@ -18,7 +17,8 @@ import (
 
 // Implement basic authentication.
 type BasicAuthenticator struct {
-	config_obj *config_proto.Config
+	config_obj       *config_proto.Config
+	base, public_url string
 }
 
 // Basic auth does not need any special handlers.
@@ -27,9 +27,8 @@ func (self *BasicAuthenticator) AddHandlers(mux *http.ServeMux) error {
 }
 
 func (self *BasicAuthenticator) AddLogoff(mux *http.ServeMux) error {
-	base := self.config_obj.GUI.BasePath
-	homepage := base + "/app/index.html"
-	mux.Handle(base+"/app/logoff.html",
+	homepage := self.base + "app/index.html"
+	mux.Handle(self.base+"app/logoff.html",
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			username, _, ok := r.BasicAuth()
 			if !ok {
@@ -73,26 +72,13 @@ func (self *BasicAuthenticator) AuthenticateUserHandler(
 		// Get the full user record with hashes so we can
 		// verify it below.
 		users_manager := services.GetUserManager()
-		user_record, err := users_manager.GetUserWithHashes(username)
-		if err != nil {
+		user_record, err := users_manager.GetUserWithHashes(r.Context(), username)
+		if err != nil || user_record.Name != username {
 			logger := logging.GetLogger(self.config_obj, &logging.Audit)
 			logger.WithFields(logrus.Fields{
 				"username": username,
 				"status":   http.StatusUnauthorized,
 			}).Error("Unknown username")
-
-			http.Error(w, "authorization failed", http.StatusUnauthorized)
-			return
-		}
-
-		// Must have at least reader.
-		perm, err := acls.CheckAccess(self.config_obj, username, acls.READ_RESULTS)
-		if !perm || err != nil || user_record.Locked || user_record.Name != username {
-			logger := logging.GetLogger(self.config_obj, &logging.Audit)
-			logger.WithFields(logrus.Fields{
-				"username": username,
-				"status":   http.StatusUnauthorized,
-			}).Error("Unauthorized username")
 
 			http.Error(w, "authorization failed", http.StatusUnauthorized)
 			return
@@ -104,6 +90,19 @@ func (self *BasicAuthenticator) AuthenticateUserHandler(
 				"username": username,
 				"status":   http.StatusUnauthorized,
 			}).Error("Invalid password")
+
+			http.Error(w, "authorization failed", http.StatusUnauthorized)
+			return
+		}
+
+		// Does the user have access to the specified org?
+		err = CheckOrgAccess(r, user_record)
+		if err != nil {
+			logger := logging.GetLogger(self.config_obj, &logging.Audit)
+			logger.WithFields(logrus.Fields{
+				"username": username,
+				"status":   http.StatusUnauthorized,
+			}).Error("Unauthorized username")
 
 			http.Error(w, "authorization failed", http.StatusUnauthorized)
 			return

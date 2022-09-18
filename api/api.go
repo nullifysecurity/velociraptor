@@ -1,6 +1,6 @@
 /*
-   Velociraptor - Hunting Evil
-   Copyright (C) 2019 Velocidex Innovations.
+   Velociraptor - Dig Deeper
+   Copyright (C) 2019-2022 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -43,6 +43,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"www.velocidex.com/golang/velociraptor/acls"
 	actions_proto "www.velocidex.com/golang/velociraptor/actions/proto"
+	"www.velocidex.com/golang/velociraptor/api/authenticators"
 	"www.velocidex.com/golang/velociraptor/api/proto"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
 	artifacts_proto "www.velocidex.com/golang/velociraptor/artifacts/proto"
@@ -55,6 +56,7 @@ import (
 	"www.velocidex.com/golang/velociraptor/paths"
 	"www.velocidex.com/golang/velociraptor/server"
 	"www.velocidex.com/golang/velociraptor/services"
+	"www.velocidex.com/golang/velociraptor/utils"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/velociraptor/vql/acl_managers"
 	"www.velocidex.com/golang/vfilter"
@@ -327,10 +329,12 @@ func (self *ApiServer) LabelClients(
 		for _, label := range in.Labels {
 			switch in.Operation {
 			case "set":
-				err = labeler.SetClientLabel(org_config_obj, client_id, label)
+				err = labeler.SetClientLabel(ctx,
+					org_config_obj, client_id, label)
 
 			case "remove":
-				err = labeler.RemoveClientLabel(org_config_obj, client_id, label)
+				err = labeler.RemoveClientLabel(ctx,
+					org_config_obj, client_id, label)
 
 			default:
 				return nil, errors.New("Unknown label operation")
@@ -416,21 +420,27 @@ func (self *ApiServer) GetUserUITraits(
 		return nil, err
 	}
 
+	authenticator, err := authenticators.NewAuthenticator(org_config_obj)
+	if err != nil {
+		return nil, err
+	}
+
 	result := NewDefaultUserObject(org_config_obj)
 	result.Username = user_info.Name
+	result.InterfaceTraits.PasswordLess = authenticator.IsPasswordLess()
 	result.InterfaceTraits.Picture = user_info.Picture
 	result.InterfaceTraits.Permissions, _ = acls.GetEffectivePolicy(org_config_obj,
 		result.Username)
 	result.Orgs = user_info.Orgs
 
 	for _, item := range result.Orgs {
-		if item.Id == "" {
+		if utils.IsRootOrg(item.Id) {
 			item.Name = "<root>"
 			item.Id = "root"
 		}
 	}
 
-	user_options, err := users.GetUserOptions(result.Username)
+	user_options, err := users.GetUserOptions(ctx, result.Username)
 	if err == nil {
 		result.InterfaceTraits.Org = user_options.Org
 		result.InterfaceTraits.UiSettings = user_options.Options
@@ -439,6 +449,8 @@ func (self *ApiServer) GetUserUITraits(
 		result.InterfaceTraits.Lang = user_options.Lang
 		result.InterfaceTraits.DefaultPassword = user_options.DefaultPassword
 		result.InterfaceTraits.DefaultDownloadsLock = user_options.DefaultDownloadsLock
+		result.InterfaceTraits.Customizations = user_options.Customizations
+		result.InterfaceTraits.Links = user_options.Links
 	}
 
 	return result, nil
@@ -455,7 +467,7 @@ func (self *ApiServer) SetGUIOptions(
 	}
 
 	defer Instrument("SetGUIOptions")()
-	return &emptypb.Empty{}, users.SetUserOptions(user_info.Name, in)
+	return &emptypb.Empty{}, users.SetUserOptions(ctx, user_info.Name, in)
 }
 
 func (self *ApiServer) VFSListDirectory(
@@ -838,6 +850,22 @@ func (self *ApiServer) Query(
 
 	user_name := user_info.Name
 
+	// If the caller wants to switch orgs, change the config to point
+	// to that org. We check permission immediately below to ensure
+	// they actually have the permission to query this org.
+	if in.OrgId != "" {
+		// Fetch the appropriate config file fro the org manager.
+		org_manager, err := services.GetOrgManager()
+		if err != nil {
+			return err
+		}
+
+		org_config_obj, err = org_manager.GetOrgConfig(in.OrgId)
+		if err != nil {
+			return err
+		}
+	}
+
 	// Check that the principal is allowed to issue queries.
 	permissions := acls.ANY_QUERY
 	ok, err := acls.CheckAccess(org_config_obj, user_name, permissions)
@@ -933,8 +961,8 @@ func (self *ApiServer) GetClientMonitoringState(
 
 	result := manager.GetClientMonitoringState()
 	if in.ClientId != "" {
-		message := manager.GetClientUpdateEventTableMessage(org_config_obj,
-			in.ClientId)
+		message := manager.GetClientUpdateEventTableMessage(
+			ctx, org_config_obj, in.ClientId)
 		result.ClientMessage = message
 	}
 

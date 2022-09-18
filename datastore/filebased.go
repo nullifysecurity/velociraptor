@@ -1,6 +1,6 @@
 /*
-   Velociraptor - Hunting Evil
-   Copyright (C) 2019 Velocidex Innovations.
+   Velociraptor - Dig Deeper
+   Copyright (C) 2019-2022 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -146,7 +146,8 @@ func (self *FileBaseDataStore) SetSubjectWithCompletion(
 	// Make sure to call the completer on all exit points
 	// (FileBaseDataStore is actually synchronous).
 	defer func() {
-		if completion != nil {
+		if completion != nil &&
+			!utils.CompareFuncs(completion, utils.SyncCompleter) {
 			completion()
 		}
 	}()
@@ -174,7 +175,8 @@ func (self *FileBaseDataStore) DeleteSubjectWithCompletion(
 	urn api.DSPathSpec, completion func()) error {
 
 	err := self.DeleteSubject(config_obj, urn)
-	if completion != nil {
+	if completion != nil &&
+		!utils.CompareFuncs(completion, utils.SyncCompleter) {
 		completion()
 	}
 
@@ -419,8 +421,8 @@ func (self *FileBaseDataStore) SetBuffer(
 	urn api.DSPathSpec, data []byte, completion func()) error {
 
 	err := writeContentToFile(config_obj, urn, data)
-
-	if completion != nil {
+	if completion != nil &&
+		!utils.CompareFuncs(completion, utils.SyncCompleter) {
 		completion()
 	}
 	return err

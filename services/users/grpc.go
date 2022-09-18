@@ -13,13 +13,14 @@ import (
 	crypto_utils "www.velocidex.com/golang/velociraptor/crypto/utils"
 	"www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/services"
+	"www.velocidex.com/golang/velociraptor/utils"
 )
 
 func (self UserManager) GetUserFromContext(ctx context.Context) (
 	*api_proto.VelociraptorUser, *config_proto.Config, error) {
 
 	grpc_user_info := GetGRPCUserInfo(self.config_obj, ctx, self.ca_pool)
-	user_record, err := self.GetUser(grpc_user_info.Name)
+	user_record, err := self.GetUser(ctx, grpc_user_info.Name)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -88,7 +89,7 @@ func GetGRPCUserInfo(
 						org_id := md.Get("OrgId")
 						if len(org_id) > 0 {
 							result.CurrentOrg = org_id[0]
-							if result.CurrentOrg == "root" {
+							if utils.IsRootOrg(result.CurrentOrg) {
 								result.CurrentOrg = ""
 							}
 						}

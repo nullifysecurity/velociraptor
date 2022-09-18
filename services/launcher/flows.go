@@ -1,6 +1,6 @@
 /*
-   Velociraptor - Hunting Evil
-   Copyright (C) 2019 Velocidex Innovations.
+   Velociraptor - Dig Deeper
+   Copyright (C) 2019-2022 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -118,6 +118,8 @@ func (self *Launcher) GetFlows(
 	return result, nil
 }
 
+// Gets more detailed information about the flow context - fills in
+// availableDownloads etc.
 func (self *Launcher) GetFlowDetails(
 	config_obj *config_proto.Config,
 	client_id string, flow_id string) (*api_proto.FlowDetails, error) {
@@ -125,20 +127,18 @@ func (self *Launcher) GetFlowDetails(
 		return &api_proto.FlowDetails{}, nil
 	}
 
+	collection_context, err := LoadCollectionContext(config_obj, client_id, flow_id)
+	if err != nil {
+		return nil, err
+	}
+
+	ping := &flows_proto.PingContext{}
 	db, err := datastore.GetDB(config_obj)
 	if err != nil {
 		return nil, err
 	}
 
 	flow_path_manager := paths.NewFlowPathManager(client_id, flow_id)
-	collection_context := &flows_proto.ArtifactCollectorContext{}
-	err = db.GetSubject(config_obj,
-		flow_path_manager.Path(), collection_context)
-	if err != nil {
-		return nil, err
-	}
-
-	ping := &flows_proto.PingContext{}
 	err = db.GetSubject(config_obj, flow_path_manager.Ping(), ping)
 	if err == nil && ping.ActiveTime > collection_context.ActiveTime {
 		collection_context.ActiveTime = ping.ActiveTime
@@ -226,6 +226,7 @@ func LoadCollectionContext(
 	if collection_context.SessionId == "" {
 		return nil, errors.New("Unknown flow " + client_id + " " + flow_id)
 	}
+
 	return collection_context, nil
 }
 
@@ -269,7 +270,7 @@ func (self *Launcher) CancelFlow(
 
 	// Get all the tasks but only dequeue the ones intended for the
 	// cancelled flow.
-	tasks, err := client_manager.PeekClientTasks(client_id)
+	tasks, err := client_manager.PeekClientTasks(ctx, client_id)
 	if err != nil {
 		return nil, err
 	}
@@ -277,7 +278,7 @@ func (self *Launcher) CancelFlow(
 	// Cancel all the relevant tasks
 	for _, task := range tasks {
 		if task.SessionId == flow_id {
-			err = client_manager.UnQueueMessageForClient(client_id, task)
+			err = client_manager.UnQueueMessageForClient(ctx, client_id, task)
 			if err != nil {
 				return nil, err
 			}
@@ -286,7 +287,7 @@ func (self *Launcher) CancelFlow(
 
 	// Queue a cancellation message to the client for this flow
 	// id.
-	err = client_manager.QueueMessageForClient(client_id,
+	err = client_manager.QueueMessageForClient(ctx, client_id,
 		&crypto_proto.VeloMessage{
 			Cancel:    &crypto_proto.Cancel{},
 			SessionId: flow_id,
@@ -333,12 +334,5 @@ func (self *Launcher) GetFlowRequests(
 	}
 
 	result.Items = flow_details.Items[offset:end]
-
-	// Remove unimportant fields
-	for _, item := range result.Items {
-		item.SessionId = ""
-		item.RequestId = 0
-	}
-
 	return result, nil
 }

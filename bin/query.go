@@ -1,6 +1,6 @@
 /*
-   Velociraptor - Hunting Evil
-   Copyright (C) 2019 Velocidex Innovations.
+   Velociraptor - Dig Deeper
+   Copyright (C) 2019-2022 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -53,6 +53,10 @@ var (
 	query_command_collect_timeout = query.Flag(
 		"timeout", "Time collection out after this many seconds.").
 		Default("0").Float64()
+
+	query_org_id = query.Flag(
+		"org", "The Org ID to target with this query").
+		Default("root").String()
 
 	query_command_collect_cpu_limit = query.Flag(
 		"cpu_limit", "A number between 0 to 100 representing maximum CPU utilization.").
@@ -164,6 +168,7 @@ func doRemoteQuery(
 	logger := logging.GetLogger(config_obj, &logging.ToolComponent)
 
 	request := &actions_proto.VQLCollectorArgs{
+		OrgId:    *query_org_id,
 		MaxRow:   1000,
 		MaxWait:  1,
 		CpuLimit: float32(*query_command_collect_cpu_limit),
@@ -252,6 +257,11 @@ func doQuery() error {
 	if err != nil {
 		return err
 	}
+
+	if config_obj.Frontend == nil {
+		config_obj.Frontend = &config_proto.FrontendConfig{}
+	}
+	config_obj.Frontend.ServerServices = services.GenericToolServices()
 
 	ctx, cancel := install_sig_handler()
 	defer cancel()

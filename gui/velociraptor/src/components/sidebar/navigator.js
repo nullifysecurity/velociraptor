@@ -1,5 +1,7 @@
 import "./navigator.css";
+import _ from 'lodash';
 import logo from  "./velo.svg";
+import UserConfig from '../core/user.js';
 
 import React, { Component } from 'react';
 import PropTypes from 'prop-types';
@@ -11,6 +13,8 @@ import T from '../i8n/i8n.js';
 import { EncodePathInURL } from '../utils/paths.js';
 
 class VeloNavigator extends Component {
+    static contextType = UserConfig;
+
     static propTypes = {
         client: PropTypes.object.isRequired,
         vfs_path: PropTypes.string,
@@ -49,6 +53,14 @@ class VeloNavigator extends Component {
         if (this.props.vfs_path.length) {
             vfs_path = this.props.vfs_path;
         }
+
+        let customization = this.context.traits && this.context.traits.customizations;
+        customization = customization || {};
+
+        // Add sidebar links
+        let sidebar_links = _.filter(
+            this.context.traits ? this.context.traits.links : [],
+            x=>x.type === "" || x.type === "sidebar");
 
         return (
             <>
@@ -101,17 +113,19 @@ class VeloNavigator extends Component {
                         </ul>
                       </NavLink>
 
-                      <NavLink to="/events/server">
-                        <ul className="nav nav-pills  navigator">
-                          <li className="nav-link" state="server_events" >
-                            <span>
-                              <i className="navicon">
-                                <FontAwesomeIcon icon="eye"/></i>
-                            </span>
-                            {T("Server Events")}
-                          </li>
-                        </ul>
-                      </NavLink>
+                      { !customization.disable_server_events &&
+                        <NavLink to="/events/server">
+                          <ul className="nav nav-pills  navigator">
+                            <li className="nav-link" state="server_events" >
+                              <span>
+                                <i className="navicon">
+                                  <FontAwesomeIcon icon="eye"/></i>
+                              </span>
+                              {T("Server Events")}
+                            </li>
+                          </ul>
+                        </NavLink>
+                      }
 
                       <NavLink to="/collected/server">
                         <ul className="nav nav-pills  navigator">
@@ -250,6 +264,27 @@ class VeloNavigator extends Component {
                             </ul>
                           </NavLink>
                         </>
+                      }
+
+                      { _.map(sidebar_links, x=>{
+                          return  (
+                           <ul key={x.text}
+                               className="nav nav-pills navigator">
+                             <li className={classNames({
+                                 "nav-link": true})}>
+                               <a href={x.url} rel="noreferrer"
+                                  target={x.new_tab ? "_blank" : ""}>
+                                 <span>
+                                   <img className="sidebar-icon"
+                                        alt={x.text}
+                                        src={x.icon_url}/>
+                                 </span>
+                                 {T(x.text)}
+                               </a>
+                              </li>
+                            </ul>
+                          );
+                          })
                       }
                     </section>
                   </div>

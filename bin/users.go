@@ -1,6 +1,6 @@
 /*
-   Velociraptor - Hunting Evil
-   Copyright (C) 2019 Velocidex Innovations.
+   Velociraptor - Dig Deeper
+   Copyright (C) 2019-2022 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -26,6 +26,7 @@ import (
 	"golang.org/x/crypto/ssh/terminal"
 	"www.velocidex.com/golang/velociraptor/acls"
 	"www.velocidex.com/golang/velociraptor/api/authenticators"
+	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/json"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/services/users"
@@ -46,6 +47,8 @@ var (
 	user_show      = user_command.Command("show", "Display information about a user")
 	user_show_name = user_show.Arg(
 		"username", "Username to show").Required().String()
+	user_show_hashes = user_show.Flag("with_hashes", "Displays the password hashes too.").
+				Bool()
 
 	user_lock = user_command.Command(
 		"lock", "Lock a user immediately by locking their account.")
@@ -61,6 +64,9 @@ func doAddUser() error {
 		return fmt.Errorf("Unable to load config file: %w", err)
 	}
 
+	if config_obj.Frontend == nil {
+		config_obj.Frontend = &config_proto.FrontendConfig{}
+	}
 	config_obj.Frontend.ServerServices = services.GenericToolServices()
 
 	ctx, cancel := install_sig_handler()
@@ -119,7 +125,7 @@ func doAddUser() error {
 	users.SetPassword(user_record, *user_add_password)
 
 	users_manager := services.GetUserManager()
-	err = users_manager.SetUser(user_record)
+	err = users_manager.SetUser(ctx, user_record)
 	if err != nil {
 		return fmt.Errorf("Unable to set user account: %w", err)
 	}
@@ -134,6 +140,9 @@ func doShowUser() error {
 		return fmt.Errorf("Unable to load config file: %w", err)
 	}
 
+	if config_obj.Frontend == nil {
+		config_obj.Frontend = &config_proto.FrontendConfig{}
+	}
 	config_obj.Frontend.ServerServices = services.GenericToolServices()
 
 	ctx, cancel := install_sig_handler()
@@ -146,9 +155,20 @@ func doShowUser() error {
 	defer sm.Close()
 
 	users_manager := services.GetUserManager()
-	user_record, err := users_manager.GetUser(*user_show_name)
+	user_record, err := users_manager.GetUser(ctx, *user_show_name)
 	if err != nil {
-		return fmt.Errorf("Unable to find user %s", *user_show_name)
+		return err
+	}
+
+	if *user_show_hashes {
+		user_record, err := users_manager.GetUserWithHashes(ctx, *user_show_name)
+		if err != nil {
+			return err
+		}
+
+		fmt.Println("The following are suitable to add into the initial users field of the config file.")
+		fmt.Printf("Password hash is %02x\n", user_record.PasswordHash)
+		fmt.Printf("Password salt is %02x\n", user_record.PasswordSalt)
 	}
 
 	s, err := json.MarshalIndent(user_record)
@@ -166,6 +186,9 @@ func doLockUser() error {
 		return fmt.Errorf("Unable to load config file: %w", err)
 	}
 
+	if config_obj.Frontend == nil {
+		config_obj.Frontend = &config_proto.FrontendConfig{}
+	}
 	config_obj.Frontend.ServerServices = services.GenericToolServices()
 
 	ctx, cancel := install_sig_handler()
@@ -178,14 +201,14 @@ func doLockUser() error {
 	defer sm.Close()
 
 	users_manager := services.GetUserManager()
-	user_record, err := users_manager.GetUser(*user_lock_name)
+	user_record, err := users_manager.GetUser(ctx, *user_lock_name)
 	if err != nil {
 		return fmt.Errorf("Unable to find user %s", *user_lock_name)
 	}
 
 	user_record.Locked = true
 
-	err = users_manager.SetUser(user_record)
+	err = users_manager.SetUser(ctx, user_record)
 	if err != nil {
 		return fmt.Errorf("Unable to set user account: %w", err)
 	}

@@ -1,8 +1,6 @@
-// +build !aix
-
 /*
-   Velociraptor - Hunting Evil
-   Copyright (C) 2019 Velocidex Innovations.
+   Velociraptor - Dig Deeper
+   Copyright (C) 2019-2022 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -47,8 +45,8 @@ var (
 	config_command = app.Command(
 		"config", "Manipulate the configuration.")
 
-	config_command_org = config_command.Flag("org", "Org ID to show").
-				String()
+	config_command_org = config_command.Flag(
+		"org", "Org ID to show").String()
 
 	config_show_command = config_command.Command(
 		"show", "Show the current config.")
@@ -115,7 +113,6 @@ func maybeGetOrgConfig(
 	org_id string, config_obj *config_proto.Config) (
 	*config_proto.Config, error) {
 
-	// For for proper initialization to catch bugs earlier.
 	org_manager, err := services.GetOrgManager()
 	if err != nil {
 		return config_obj, err
@@ -395,6 +392,20 @@ func doDumpApiClientConfig() error {
 			"api keys with this name.")
 	}
 
+	if config_obj.Frontend == nil {
+		config_obj.Frontend = &config_proto.FrontendConfig{}
+	}
+	config_obj.Frontend.ServerServices = services.GenericToolServices()
+
+	ctx, cancel := install_sig_handler()
+	defer cancel()
+
+	sm, err := startup.StartToolServices(ctx, config_obj)
+	if err != nil {
+		return fmt.Errorf("Starting services: %w", err)
+	}
+	defer sm.Close()
+
 	bundle, err := crypto.GenerateServerCert(
 		config_obj, *config_api_client_common_name)
 	if err != nil {
@@ -476,10 +487,10 @@ func doDumpApiClientConfig() error {
 
 		// Make sure the user actually exists.
 		user_manager := services.GetUserManager()
-		_, err = user_manager.GetUser(*config_api_client_common_name)
+		_, err = user_manager.GetUser(ctx, *config_api_client_common_name)
 		if err != nil {
 			// Need to ensure we have a user
-			err := user_manager.SetUser(&api_proto.VelociraptorUser{
+			err := user_manager.SetUser(ctx, &api_proto.VelociraptorUser{
 				Name: *config_api_client_common_name,
 			})
 			if err != nil {

@@ -1,6 +1,6 @@
 /*
-   Velociraptor - Hunting Evil
-   Copyright (C) 2019 Velocidex Innovations.
+   Velociraptor - Dig Deeper
+   Copyright (C) 2019-2022 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -59,10 +59,11 @@ type Responder struct {
 	output chan *crypto_proto.VeloMessage
 
 	sync.Mutex
-	request    *crypto_proto.VeloMessage
-	logger     *logging.LogContext
+	request *crypto_proto.VeloMessage
+	logger  *logging.LogContext
+
 	start_time int64
-	log_id     int64
+	log_id     int32
 
 	// The name of the query we are currently running.
 	Artifact string
@@ -84,6 +85,15 @@ func NewResponder(
 		logger:     logging.GetLogger(config_obj, &logging.ClientComponent),
 		start_time: time.Now().UnixNano(),
 	}
+
+	if request.VQLClientAction != nil {
+		for _, q := range request.VQLClientAction.Query {
+			if q.Name != "" {
+				result.Artifact = q.Name
+			}
+		}
+	}
+
 	return result
 }
 
@@ -123,6 +133,7 @@ func (self *Responder) getStatus() *crypto_proto.VeloStatus {
 		LogRows:           self.log_rows,
 		ResultRows:        self.result_rows,
 		Duration:          time.Now().UnixNano() - self.start_time,
+		Artifact:          self.Artifact,
 	}
 
 	if self.request.VQLClientAction != nil {
@@ -164,6 +175,8 @@ func (self *Responder) RaiseError(ctx context.Context, message string) {
 	status.Backtrace = string(debug.Stack())
 	status.ErrorMessage = message
 	status.Status = crypto_proto.VeloStatus_GENERIC_ERROR
+	status.NamesWithResponse = self.names_with_response
+	status.Artifact = self.Artifact
 
 	self.AddResponse(ctx, &crypto_proto.VeloMessage{Status: status})
 }
@@ -181,13 +194,13 @@ func (self *Responder) Log(ctx context.Context, level string,
 	self.AddResponse(ctx, &crypto_proto.VeloMessage{
 		RequestId: constants.LOG_SINK,
 		LogMessage: &crypto_proto.LogMessage{
-			Id:        atomic.LoadInt64(&self.log_id),
+			Id:        int64(atomic.LoadInt32(&self.log_id)),
 			Message:   fmt.Sprintf(format, v...),
 			Timestamp: uint64(time.Now().UTC().UnixNano() / 1000),
 			Artifact:  self.Artifact,
 			Level:     level,
 		}})
-	atomic.AddInt64(&self.log_id, 1)
+	atomic.AddInt32(&self.log_id, 1)
 }
 
 func (self *Responder) SessionId() string {

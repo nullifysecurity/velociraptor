@@ -9,6 +9,7 @@ import (
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
 	"www.velocidex.com/golang/velociraptor/json"
 	"www.velocidex.com/golang/velociraptor/services"
+	"www.velocidex.com/golang/velociraptor/utils"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/vfilter"
 	"www.velocidex.com/golang/vfilter/arg_parser"
@@ -57,7 +58,7 @@ func (self UsersPlugin) Call(
 		}
 
 		users := services.GetUserManager()
-		user_list, err := users.ListUsers()
+		user_list, err := users.ListUsers(ctx)
 		if err != nil {
 			scope.Log("users: %v", err)
 			return
@@ -80,7 +81,7 @@ func (self UsersPlugin) Call(
 
 			for _, org_record := range user_details.Orgs {
 				// Only display users that belong to the current org
-				if !arg.AllOrgs && org_record.Id != current_org {
+				if !arg.AllOrgs && !utils.CompareOrgIds(org_record.Id, current_org) {
 					continue
 				}
 
@@ -98,11 +99,15 @@ func (self UsersPlugin) Call(
 				policy, err := acls.GetPolicy(org_config_obj, user_details.Name)
 				if err == nil {
 					details.Set("roles", policy.Roles)
+				} else {
+					details.Set("roles", &vfilter.Null{})
 				}
 
 				effective_policy, err := acls.GetEffectivePolicy(org_config_obj, user_details.Name)
 				if err == nil {
 					details.Set("effective_policy", ConvertPolicyToOrderedDict(effective_policy))
+				} else {
+					details.Set("effective_policy", &vfilter.Null{})
 				}
 
 				select {

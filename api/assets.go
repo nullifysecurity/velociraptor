@@ -1,6 +1,6 @@
 /*
-   Velociraptor - Hunting Evil
-   Copyright (C) 2019 Velocidex Innovations.
+   Velociraptor - Dig Deeper
+   Copyright (C) 2019-2022 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -77,7 +77,7 @@ func GetTemplateHandler(
 		}
 
 		users := services.GetUserManager()
-		user_options, err := users.GetUserOptions(userinfo.Name)
+		user_options, err := users.GetUserOptions(r.Context(), userinfo.Name)
 		if err != nil {
 			// Options may not exist yet
 			user_options = &proto.SetGUIOptionsRequest{}
@@ -89,6 +89,7 @@ func GetTemplateHandler(
 			BasePath:  base,
 			Heading:   "Heading",
 			UserTheme: user_options.Theme,
+			OrgId:     user_options.Org,
 		}
 		err = tmpl.Execute(w, args)
 		if err != nil {

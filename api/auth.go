@@ -1,6 +1,6 @@
 /*
-   Velociraptor - Hunting Evil
-   Copyright (C) 2019 Velocidex Innovations.
+   Velociraptor - Dig Deeper
+   Copyright (C) 2019-2022 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -30,13 +30,7 @@ func NewDefaultUserObject(config_obj *config_proto.Config) *api_proto.ApiUser {
 
 	if config_obj.GUI != nil {
 		result.InterfaceTraits = &api_proto.ApiUserInterfaceTraits{
-			AuthUsingGoogle: config_obj.GUI.GoogleOauthClientId != "",
-			Links:           []*api_proto.UILink{},
-		}
-
-		for _, link := range config_obj.GUI.Links {
-			result.InterfaceTraits.Links = append(result.InterfaceTraits.Links,
-				&api_proto.UILink{Text: link.Text, Url: link.Url})
+			Links: config_obj.GUI.Links,
 		}
 	}
 

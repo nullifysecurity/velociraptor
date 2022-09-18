@@ -8,7 +8,6 @@ import Timeline, {
     CustomMarker,
 } from 'react-calendar-timeline';
 import moment from 'moment-timezone';
-import qs from 'qs';
 import axios from 'axios';
 import { PrepareData } from '../core/table.js';
 import api from '../core/api-service.js';
@@ -17,6 +16,7 @@ import VeloValueRenderer from '../utils/value.js';
 import Dropdown from 'react-bootstrap/Dropdown';
 import T from '../i8n/i8n.js';
 
+import DeleteTimelineRanges from './delete.js';
 import Button from 'react-bootstrap/Button';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 
@@ -106,8 +106,6 @@ class EventTableRenderer  extends Component {
         for (var j=0; j<rows.length; j++) {
             rows[j]["_id"] = j;
         }
-
-        //console.log(this.props.columns, this.state.toggles);
 
         return (
             <div className="velo-table timeline-table">
@@ -367,7 +365,6 @@ export default class EventTimelineViewer extends React.Component {
 
         let downloads_csv = Object.assign({}, downloads_json);
         downloads_csv.download_format = "csv";
-
         return <>
                  {this.pageSizeSelector()}
                  <Dropdown>
@@ -376,8 +373,7 @@ export default class EventTimelineViewer extends React.Component {
                    </Dropdown.Toggle>
                    <Dropdown.Menu>
                      <Dropdown.Item as="a"
-                       href={api.base_path + "/api/v1/DownloadTable?" +
-                             qs.stringify(downloads_csv,  {indices: false})}
+                       href={api.href("/api/v1/DownloadTable", downloads_csv)}
                        variant="default" type="button">
                        <FontAwesomeIcon icon="file-csv"/>
                        <span className="button-label">
@@ -388,8 +384,7 @@ export default class EventTimelineViewer extends React.Component {
                        </span>
                      </Dropdown.Item>
                      <Dropdown.Item as="a"
-                       href={api.base_path + "/api/v1/DownloadTable?" +
-                             qs.stringify(downloads_json,  {indices: false})}
+                       href={api.href("/api/v1/DownloadTable", downloads_json)}
                        variant="default" type="button">
                        <FontAwesomeIcon icon="file-code"/>
                        <span className="button-label">
@@ -401,6 +396,12 @@ export default class EventTimelineViewer extends React.Component {
                      </Dropdown.Item>
                    </Dropdown.Menu>
                  </Dropdown>
+
+                 <Button title="Delete"
+                         onClick={() => this.setState({showDeleteDialog: true})}
+                         variant="default">
+                   <FontAwesomeIcon icon="trash"/>
+                 </Button>
 
                  <Button title="Previous"
                          onClick={() => this.prevPage()}
@@ -441,6 +442,8 @@ export default class EventTimelineViewer extends React.Component {
 
         available_timestamps: [],
         available_log_timestamps: [],
+
+        showDeleteDialog: false,
     }
 
     render() {
@@ -498,7 +501,24 @@ export default class EventTimelineViewer extends React.Component {
         _.each(this.state.available_timestamps, x=>adder(x, 1));
         _.each(this.state.available_log_timestamps, x=>adder(x, 2));
 
+        let visible_start_time = this.state.visibleTimeStart;
+        let visible_end_time = this.state.visibleTimeEnd;
+
         return <>
+                 {this.state.showDeleteDialog &&
+                  <DeleteTimelineRanges
+                    client_id={this.props.client_id}
+                    artifact={this.props.artifact}
+                    start_time={visible_start_time}
+                    end_time={visible_end_time}
+                    onClose={()=>{
+                        this.setState({showDeleteDialog: false});
+
+                        // Trigger a refresh of the table
+                        this.fetchAvailableTimes();
+                    }}
+                  />}
+
                  <Timeline
                    groups={groups}
                    items={items}

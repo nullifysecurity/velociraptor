@@ -1,6 +1,6 @@
 /*
-   Velociraptor - Hunting Evil
-   Copyright (C) 2019 Velocidex Innovations.
+   Velociraptor - Dig Deeper
+   Copyright (C) 2019-2022 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -50,6 +50,7 @@ func streamQuery(
 	logger := logging.GetLogger(config_obj, &logging.APICmponent)
 	logger.WithFields(logrus.Fields{
 		"arg":  arg,
+		"org":  arg.OrgId,
 		"user": peer_name,
 	}).Info("Query API call")
 

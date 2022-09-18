@@ -1,8 +1,8 @@
 // +build server_vql
 
 /*
-   Velociraptor - Hunting Evil
-   Copyright (C) 2019 Velocidex Innovations.
+   Velociraptor - Dig Deeper
+   Copyright (C) 2019-2022 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -69,13 +69,13 @@ func (self *AddLabels) Call(ctx context.Context,
 
 		switch arg.Op {
 		case "set":
-			err = labeler.SetClientLabel(config_obj, arg.ClientId, label)
+			err = labeler.SetClientLabel(ctx, config_obj, arg.ClientId, label)
 
 		case "remove":
-			err = labeler.RemoveClientLabel(config_obj, arg.ClientId, label)
+			err = labeler.RemoveClientLabel(ctx, config_obj, arg.ClientId, label)
 
 		case "check":
-			if !labeler.IsLabelSet(config_obj, arg.ClientId, label) {
+			if !labeler.IsLabelSet(ctx, config_obj, arg.ClientId, label) {
 				return false
 			}
 		}

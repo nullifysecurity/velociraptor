@@ -8,10 +8,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	oidc "github.com/coreos/go-oidc"
-	jwt "github.com/golang-jwt/jwt"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/oauth2"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
@@ -50,7 +48,7 @@ func (self *OidcAuthenticatorCognito) oauthOidcCallback(
 		if oauthState == nil || r.FormValue("state") != oauthState.Value {
 			logging.GetLogger(self.config_obj, &logging.GUIComponent).
 				Error("invalid oauth state of OIDC")
-			http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
+			http.Redirect(w, r, self.base, http.StatusTemporaryRedirect)
 			return
 		}
 
@@ -60,7 +58,7 @@ func (self *OidcAuthenticatorCognito) oauthOidcCallback(
 		if err != nil {
 			logging.GetLogger(self.config_obj, &logging.GUIComponent).
 				Error("can not get oauthToken from OIDC provider: %v", err)
-			http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
+			http.Redirect(w, r, self.base, http.StatusTemporaryRedirect)
 			return
 		}
 		userInfo, err := getUserInfo(
@@ -68,36 +66,26 @@ func (self *OidcAuthenticatorCognito) oauthOidcCallback(
 		if err != nil {
 			logging.GetLogger(self.config_obj, &logging.GUIComponent).
 				Error("can not get UserInfo from OIDC provider: %v", err)
-			http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
+			http.Redirect(w, r, self.base, http.StatusTemporaryRedirect)
 			return
 		}
 
-		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-			"user":    userInfo.Email,
-			"expires": float64(time.Now().AddDate(0, 0, 1).Unix()),
-		})
-
-		tokenString, err := token.SignedString(
-			[]byte(self.config_obj.Frontend.PrivateKey))
+		cookie, err := getSignedJWTTokenCookie(
+			self.config_obj, self.authenticator,
+			&Claims{
+				Username: userInfo.Email,
+			})
 		if err != nil {
 			logging.GetLogger(self.config_obj, &logging.GUIComponent).
 				WithFields(logrus.Fields{
 					"err": err.Error(),
 				}).Error("can not get a signed tokenString")
-			http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
+			http.Redirect(w, r, self.base, http.StatusTemporaryRedirect)
 			return
 		}
 
-		cookie := &http.Cookie{
-			Name:     "VelociraptorAuth",
-			Value:    tokenString,
-			Path:     "/",
-			HttpOnly: true,
-			Secure:   true,
-			Expires:  time.Now().AddDate(0, 0, 1),
-		}
 		http.SetCookie(w, cookie)
-		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
+		http.Redirect(w, r, self.base, http.StatusTemporaryRedirect)
 	})
 }
 
@@ -107,6 +95,8 @@ func init() {
 		return &OidcAuthenticatorCognito{OidcAuthenticator{
 			config_obj:    config_obj,
 			authenticator: auth_config,
+			base:          getBasePath(config_obj),
+			public_url:    getPublicURL(config_obj),
 		}}, nil
 	})
 }

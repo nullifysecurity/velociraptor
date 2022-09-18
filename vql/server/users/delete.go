@@ -4,9 +4,10 @@ import (
 	"context"
 
 	"github.com/Velocidex/ordereddict"
+	"github.com/sirupsen/logrus"
 	"www.velocidex.com/golang/velociraptor/acls"
-	"www.velocidex.com/golang/velociraptor/datastore"
-	"www.velocidex.com/golang/velociraptor/paths"
+	"www.velocidex.com/golang/velociraptor/logging"
+	"www.velocidex.com/golang/velociraptor/services"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/vfilter"
 	"www.velocidex.com/golang/vfilter/arg_parser"
@@ -42,21 +43,16 @@ func (self UserDeleteFunction) Call(
 		return vfilter.Null{}
 	}
 
-	db, err := datastore.GetDB(config_obj)
-	if err != nil {
-		scope.Log("user_delete: %s", err)
-		return vfilter.Null{}
-	}
+	user_manager := services.GetUserManager()
 
-	user_path_manager := paths.NewUserPathManager(arg.Username)
-	err = db.DeleteSubject(config_obj, user_path_manager.Path())
-	if err != nil {
-		scope.Log("user_delete: %s", err)
-		return vfilter.Null{}
-	}
+	principal := vql_subsystem.GetPrincipal(scope)
+	logger := logging.GetLogger(config_obj, &logging.Audit)
+	logger.WithFields(logrus.Fields{
+		"Username":  arg.Username,
+		"Principal": principal,
+	}).Info("user_delete")
 
-	// Also remove the ACLs for the user.
-	err = db.DeleteSubject(config_obj, user_path_manager.ACL())
+	err = user_manager.DeleteUser(ctx, config_obj, arg.Username)
 	if err != nil {
 		scope.Log("user_delete: %s", err)
 		return vfilter.Null{}

@@ -1,6 +1,6 @@
 /*
-   Velociraptor - Hunting Evil
-   Copyright (C) 2019 Velocidex Innovations.
+   Velociraptor - Dig Deeper
+   Copyright (C) 2019-2022 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -177,6 +177,21 @@ func VerifyConfig(config_obj *config_proto.Config) error {
 		// Add a client id for information here
 		writeback.ClientId = ClientIDFromPublicKey(&private_key.PublicKey)
 		writeback.PrivateKey = string(pem)
+		err = config.UpdateWriteback(config_obj.Client, writeback)
+		if err != nil {
+			return fmt.Errorf("During UpdateWriteback: %w", err)
+		}
+	}
+
+	// Make sure the client if is set in the writeback.
+	if writeback.ClientId == "" {
+		private_key, err := ParseRsaPrivateKeyFromPemStr([]byte(writeback.PrivateKey))
+		if err != nil {
+			return errors.WithStack(err)
+		}
+
+		// Add a client id for information here
+		writeback.ClientId = ClientIDFromPublicKey(&private_key.PublicKey)
 		err = config.UpdateWriteback(config_obj.Client, writeback)
 		if err != nil {
 			return fmt.Errorf("During UpdateWriteback: %w", err)

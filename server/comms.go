@@ -1,6 +1,6 @@
 /*
-   Velociraptor - Hunting Evil
-   Copyright (C) 2019 Velocidex Innovations.
+   Velociraptor - Dig Deeper
+   Copyright (C) 2019-2022 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -21,17 +21,19 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"html"
 	"io"
 	"io/ioutil"
 	"math/rand"
 	"net/http"
-	"strings"
+	"net/url"
 	"sync/atomic"
 	"time"
 
-	file_store_accessor "www.velocidex.com/golang/velociraptor/accessors/file_store"
 	"www.velocidex.com/golang/velociraptor/crypto"
 	"www.velocidex.com/golang/velociraptor/file_store"
+	"www.velocidex.com/golang/velociraptor/file_store/api"
+	"www.velocidex.com/golang/velociraptor/paths"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/utils"
 
@@ -136,10 +138,8 @@ func PrepareFrontendMux(
 	// does not have to be a physical directory - it is served
 	// from the filestore.
 	router.Handle(base+"/public/", GetLoggingHandler(config_obj, "/public")(
-		http.StripPrefix(base, forceMime(http.FileServer(
-			file_store_accessor.NewFileSystem(config_obj,
-				file_store.GetFileStore(config_obj),
-				"/public/"))))))
+		http.StripPrefix(base,
+			downloadPublic(config_obj, []string{"public"}))))
 
 	return nil
 }
@@ -359,7 +359,16 @@ func control(
 		go func() {
 			defer close(sync)
 
-			response, _, err := server_obj.Process(ctx, message_info,
+			// Process the request with a different context - if the
+			// client disconnects quickly the request will be
+			// cancelled and aborted. This seems to happen sometimes
+			// on some clients so we enforce a hard timeout for
+			// processing anyway.
+			subctx, cancel := context.WithTimeout(context.Background(),
+				60*time.Second)
+			defer cancel()
+
+			response, _, err := server_obj.Process(subctx, message_info,
 				false, // drain_requests_for_client
 			)
 			if err != nil {
@@ -472,11 +481,11 @@ func reader(server_obj *Server) http.Handler {
 
 		// If client is not known, make it enrol. This can happen for
 		// example, when the client was just deleted, but we still
-		// have ciphers cached to it - the client is not know but we
+		// have ciphers cached to it - the client is not known but we
 		// can still verify the comms as authenticated. NOTE: this
 		// check should be very quick since it is just a lookup in the
 		// client info manager's LRU.
-		_, err = client_info_manager.Get(source)
+		_, err = client_info_manager.Get(ctx, source)
 		if err != nil {
 			journal, err := services.GetJournal(org_config_obj)
 			if err != nil {
@@ -484,7 +493,7 @@ func reader(server_obj *Server) http.Handler {
 				return
 			}
 
-			// This should triggen an enrollment flow.
+			// This should trigger an enrollment flow.
 			err = journal.PushRowsToArtifact(org_config_obj,
 				[]*ordereddict.Dict{
 					ordereddict.NewDict().
@@ -672,18 +681,42 @@ func GetLoggingHandler(config_obj *config_proto.Config,
 	}
 }
 
-// Force mime type to binary stream.
-func forceMime(parent http.Handler) http.Handler {
+func downloadPublic(
+	config_obj *config_proto.Config, prefix []string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Prevent directory listings.
-		if strings.HasSuffix(r.URL.Path, "/") {
-			http.NotFound(w, r)
+		path_spec := paths.FSPathSpecFromClientPath(r.URL.Path)
+		components := path_spec.Components()
+
+		// make sure the prefix is correct
+		for i, p := range prefix {
+			if len(components) <= i || p != components[i] {
+				returnError(w, 404, "Not Found")
+				return
+			}
+		}
+
+		file_store_factory := file_store.GetFileStore(config_obj)
+		fd, err := file_store_factory.ReadFile(path_spec)
+		if err != nil {
+			returnError(w, 404, err.Error())
 			return
 		}
 
+		// From here on we already sent the headers and we can
+		// not really report an error to the client.
+		w.Header().Set("Content-Disposition", "attachment; filename="+
+			url.PathEscape(path_spec.Base())+api.GetExtensionForFilestore(path_spec))
+
 		w.Header().Set("Content-Type", "binary/octet-stream")
-		parent.ServeHTTP(w, r)
+		w.WriteHeader(200)
+
+		utils.Copy(r.Context(), w, fd)
 	})
+}
+
+func returnError(w http.ResponseWriter, code int, message string) {
+	w.WriteHeader(code)
+	_, _ = w.Write([]byte(html.EscapeString(message)))
 }
 
 // Calculate QPS

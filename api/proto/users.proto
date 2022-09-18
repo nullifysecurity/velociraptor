@@ -2,6 +2,7 @@ syntax = "proto3";
 
 import "proto/semantic.proto";
 import "acls/proto/acl.proto";
+import "config/proto/config.proto";
 import "flows/proto/artifact_collector.proto";
 
 package proto;
@@ -46,43 +47,21 @@ message VelociraptorUser {
 }
 
 
-// Next field: 4
-message GUISettings {
-    option (semantic) = {
-        description: "User GUI settings and preferences."
-    };
-
-    enum UIMode {
-        BASIC = 0;
-        ADVANCED = 1;
-        DEBUG = 2;
-    }
-
-    UIMode mode = 1 [(sem_type) = {
-            description: "User interface mode.",
-        }];
-
-    bool canary_mode = 3 [(sem_type) = {
-            description: "If true, show features that are being canaried."
-        }];
-}
-
-message UILink {
-    string text = 1;
-    string url = 2;
-}
-
-// These traits are used by the AdminUI Angular app to disable certain
-// UI elements based on the user's permission set.
+// These traits are used to control the GUI App. Many of these fields
+// are constructed from the VelociraptorUser, the config file, the
+// GUIOptions etc.
 message ApiUserInterfaceTraits {
     ApiClientACL Permissions = 9;
+    GUICustomizations customizations = 10;
 
     string lang = 22;
 
-    bool auth_using_google = 19;
+    // Set if the authenticator is password less (e.g. OAuth, SAML
+    // etc)
+    bool password_less = 25;
     string picture = 20;
 
-    repeated UILink links = 21;
+    repeated GUILink links = 21;
 
     // Get the user's preferred theme.
     string theme = 2;
@@ -99,15 +78,17 @@ message ApiUserInterfaceTraits {
 
     // Current selected Org.
     string org = 24;
+
+    bool disable_server_events = 26;
 };
 
+// Describe the user to the GUI.
 message ApiUser {
     string username = 1 [(sem_type) = {
             description: "The name of the user."
         }];
-    GUISettings settings = 2 [(sem_type) = {
-            description: "User UI settings."
-        }];
+
+    // Gets constructed from the users.GetUserOptions()
     ApiUserInterfaceTraits interface_traits = 3 [(sem_type) = {
             description: "User's interface traits (what they can and can't do "
             "in the UI)."
@@ -175,6 +156,11 @@ message GetUserNotificationsRequest {
         }];
 }
 
+// Contol the GUI per user.
+message GUICustomizations {
+    bool disable_server_events = 1;
+}
+
 message SetGUIOptionsRequest {
     string theme = 2;
     string timezone = 6;
@@ -190,10 +176,18 @@ message SetGUIOptionsRequest {
 
     // Current org id
     string org = 7;
+
+    GUICustomizations customizations = 8;
+
+    repeated GUILink links = 9;
 }
 
 message Users {
     repeated VelociraptorUser users = 1;
+}
+
+message SetPasswordRequest {
+    string password = 1;
 }
 
 // Store favorite collections (essential preset collection specs)
