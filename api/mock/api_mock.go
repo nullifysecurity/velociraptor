@@ -181,6 +181,26 @@ func (mr *MockAPIClientMockRecorder) CreateNotebookDownloadFile(arg0, arg1 inter
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateNotebookDownloadFile", reflect.TypeOf((*MockAPIClient)(nil).CreateNotebookDownloadFile), varargs...)
 }
 
+// CreateUser mocks base method.
+func (m *MockAPIClient) CreateUser(arg0 context.Context, arg1 *proto0.UpdateUserRequest, arg2 ...grpc.CallOption) (*emptypb.Empty, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1}
+	for _, a := range arg2 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "CreateUser", varargs...)
+	ret0, _ := ret[0].(*emptypb.Empty)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CreateUser indicates an expected call of CreateUser.
+func (mr *MockAPIClientMockRecorder) CreateUser(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1}, arg2...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateUser", reflect.TypeOf((*MockAPIClient)(nil).CreateUser), varargs...)
+}
+
 // DeleteSubject mocks base method.
 func (m *MockAPIClient) DeleteSubject(arg0 context.Context, arg1 *proto0.DataRequest, arg2 ...grpc.CallOption) (*emptypb.Empty, error) {
 	m.ctrl.T.Helper()
@@ -379,6 +399,26 @@ func (mr *MockAPIClientMockRecorder) GetFlowRequests(arg0, arg1 interface{}, arg
 	mr.mock.ctrl.T.Helper()
 	varargs := append([]interface{}{arg0, arg1}, arg2...)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetFlowRequests", reflect.TypeOf((*MockAPIClient)(nil).GetFlowRequests), varargs...)
+}
+
+// GetGlobalUsers mocks base method.
+func (m *MockAPIClient) GetGlobalUsers(arg0 context.Context, arg1 *emptypb.Empty, arg2 ...grpc.CallOption) (*proto0.Users, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1}
+	for _, a := range arg2 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "GetGlobalUsers", varargs...)
+	ret0, _ := ret[0].(*proto0.Users)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetGlobalUsers indicates an expected call of GetGlobalUsers.
+func (mr *MockAPIClientMockRecorder) GetGlobalUsers(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1}, arg2...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetGlobalUsers", reflect.TypeOf((*MockAPIClient)(nil).GetGlobalUsers), varargs...)
 }
 
 // GetHunt mocks base method.
@@ -601,6 +641,26 @@ func (mr *MockAPIClientMockRecorder) GetToolInfo(arg0, arg1 interface{}, arg2 ..
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetToolInfo", reflect.TypeOf((*MockAPIClient)(nil).GetToolInfo), varargs...)
 }
 
+// GetUser mocks base method.
+func (m *MockAPIClient) GetUser(arg0 context.Context, arg1 *proto0.UserRequest, arg2 ...grpc.CallOption) (*proto0.VelociraptorUser, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1}
+	for _, a := range arg2 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "GetUser", varargs...)
+	ret0, _ := ret[0].(*proto0.VelociraptorUser)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetUser indicates an expected call of GetUser.
+func (mr *MockAPIClientMockRecorder) GetUser(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1}, arg2...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUser", reflect.TypeOf((*MockAPIClient)(nil).GetUser), varargs...)
+}
+
 // GetUserFavorites mocks base method.
 func (m *MockAPIClient) GetUserFavorites(arg0 context.Context, arg1 *proto0.Favorite, arg2 ...grpc.CallOption) (*proto0.Favorites, error) {
 	m.ctrl.T.Helper()
@@ -619,6 +679,26 @@ func (mr *MockAPIClientMockRecorder) GetUserFavorites(arg0, arg1 interface{}, ar
 	mr.mock.ctrl.T.Helper()
 	varargs := append([]interface{}{arg0, arg1}, arg2...)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserFavorites", reflect.TypeOf((*MockAPIClient)(nil).GetUserFavorites), varargs...)
+}
+
+// GetUserRoles mocks base method.
+func (m *MockAPIClient) GetUserRoles(arg0 context.Context, arg1 *proto0.UserRequest, arg2 ...grpc.CallOption) (*proto0.UserRoles, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1}
+	for _, a := range arg2 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "GetUserRoles", varargs...)
+	ret0, _ := ret[0].(*proto0.UserRoles)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetUserRoles indicates an expected call of GetUserRoles.
+func (mr *MockAPIClientMockRecorder) GetUserRoles(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1}, arg2...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserRoles", reflect.TypeOf((*MockAPIClient)(nil).GetUserRoles), varargs...)
 }
 
 // GetUserUITraits mocks base method.
@@ -901,6 +981,26 @@ func (mr *MockAPIClientMockRecorder) Query(arg0, arg1 interface{}, arg2 ...inter
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Query", reflect.TypeOf((*MockAPIClient)(nil).Query), varargs...)
 }
 
+// ReformatVQL mocks base method.
+func (m *MockAPIClient) ReformatVQL(arg0 context.Context, arg1 *proto0.ReformatVQLMessage, arg2 ...grpc.CallOption) (*proto0.ReformatVQLMessage, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1}
+	for _, a := range arg2 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "ReformatVQL", varargs...)
+	ret0, _ := ret[0].(*proto0.ReformatVQLMessage)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ReformatVQL indicates an expected call of ReformatVQL.
+func (mr *MockAPIClientMockRecorder) ReformatVQL(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1}, arg2...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReformatVQL", reflect.TypeOf((*MockAPIClient)(nil).ReformatVQL), varargs...)
+}
+
 // SetArtifactFile mocks base method.
 func (m *MockAPIClient) SetArtifactFile(arg0 context.Context, arg1 *proto0.SetArtifactRequest, arg2 ...grpc.CallOption) (*proto0.APIResponse, error) {
 	m.ctrl.T.Helper()
@@ -922,7 +1022,7 @@ func (mr *MockAPIClientMockRecorder) SetArtifactFile(arg0, arg1 interface{}, arg
 }
 
 // SetClientMetadata mocks base method.
-func (m *MockAPIClient) SetClientMetadata(arg0 context.Context, arg1 *proto0.ClientMetadata, arg2 ...grpc.CallOption) (*emptypb.Empty, error) {
+func (m *MockAPIClient) SetClientMetadata(arg0 context.Context, arg1 *proto0.SetClientMetadataRequest, arg2 ...grpc.CallOption) (*emptypb.Empty, error) {
 	m.ctrl.T.Helper()
 	varargs := []interface{}{arg0, arg1}
 	for _, a := range arg2 {
@@ -962,14 +1062,14 @@ func (mr *MockAPIClientMockRecorder) SetClientMonitoringState(arg0, arg1 interfa
 }
 
 // SetGUIOptions mocks base method.
-func (m *MockAPIClient) SetGUIOptions(arg0 context.Context, arg1 *proto0.SetGUIOptionsRequest, arg2 ...grpc.CallOption) (*emptypb.Empty, error) {
+func (m *MockAPIClient) SetGUIOptions(arg0 context.Context, arg1 *proto0.SetGUIOptionsRequest, arg2 ...grpc.CallOption) (*proto0.SetGUIOptionsResponse, error) {
 	m.ctrl.T.Helper()
 	varargs := []interface{}{arg0, arg1}
 	for _, a := range arg2 {
 		varargs = append(varargs, a)
 	}
 	ret := m.ctrl.Call(m, "SetGUIOptions", varargs...)
-	ret0, _ := ret[0].(*emptypb.Empty)
+	ret0, _ := ret[0].(*proto0.SetGUIOptionsResponse)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -1059,6 +1159,26 @@ func (mr *MockAPIClientMockRecorder) SetToolInfo(arg0, arg1 interface{}, arg2 ..
 	mr.mock.ctrl.T.Helper()
 	varargs := append([]interface{}{arg0, arg1}, arg2...)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetToolInfo", reflect.TypeOf((*MockAPIClient)(nil).SetToolInfo), varargs...)
+}
+
+// SetUserRoles mocks base method.
+func (m *MockAPIClient) SetUserRoles(arg0 context.Context, arg1 *proto0.UserRoles, arg2 ...grpc.CallOption) (*emptypb.Empty, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1}
+	for _, a := range arg2 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "SetUserRoles", varargs...)
+	ret0, _ := ret[0].(*emptypb.Empty)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// SetUserRoles indicates an expected call of SetUserRoles.
+func (mr *MockAPIClientMockRecorder) SetUserRoles(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1}, arg2...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetUserRoles", reflect.TypeOf((*MockAPIClient)(nil).SetUserRoles), varargs...)
 }
 
 // UpdateNotebook mocks base method.
@@ -1159,6 +1279,26 @@ func (mr *MockAPIClientMockRecorder) VFSListDirectory(arg0, arg1 interface{}, ar
 	mr.mock.ctrl.T.Helper()
 	varargs := append([]interface{}{arg0, arg1}, arg2...)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "VFSListDirectory", reflect.TypeOf((*MockAPIClient)(nil).VFSListDirectory), varargs...)
+}
+
+// VFSListDirectoryFiles mocks base method.
+func (m *MockAPIClient) VFSListDirectoryFiles(arg0 context.Context, arg1 *proto0.GetTableRequest, arg2 ...grpc.CallOption) (*proto0.GetTableResponse, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1}
+	for _, a := range arg2 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "VFSListDirectoryFiles", varargs...)
+	ret0, _ := ret[0].(*proto0.GetTableResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// VFSListDirectoryFiles indicates an expected call of VFSListDirectoryFiles.
+func (mr *MockAPIClientMockRecorder) VFSListDirectoryFiles(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1}, arg2...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "VFSListDirectoryFiles", reflect.TypeOf((*MockAPIClient)(nil).VFSListDirectoryFiles), varargs...)
 }
 
 // VFSRefreshDirectory mocks base method.

@@ -1,5 +1,3 @@
-// +build server_vql
-
 /*
    Velociraptor - Dig Deeper
    Copyright (C) 2019-2022 Rapid7 Inc.
@@ -180,7 +178,7 @@ func (self HuntResultsPlugin) Call(
 				return
 			}
 
-			hunt_dispatcher.FindCollectedArtifacts(config_obj, hunt_obj)
+			hunt_dispatcher.FindCollectedArtifacts(ctx, config_obj, hunt_obj)
 			if len(hunt_obj.Artifacts) == 0 {
 				scope.Log("hunt_results: no artifacts in hunt")
 				return
@@ -202,7 +200,7 @@ func (self HuntResultsPlugin) Call(
 				}
 				repo, err := manager.GetGlobalRepository(config_obj)
 				if err == nil {
-					artifact_def, ok := repo.Get(config_obj, arg.Artifact)
+					artifact_def, ok := repo.Get(ctx, config_obj, arg.Artifact)
 					if ok {
 						for _, source := range artifact_def.Sources {
 							if source.Name != "" {
@@ -240,7 +238,7 @@ func (self HuntResultsPlugin) Call(
 
 			// Read individual flow's results.
 			path_manager, err := artifact_paths.NewArtifactPathManager(
-				config_obj,
+				ctx, config_obj,
 				flow_details.Context.ClientId,
 				flow_details.Context.SessionId,
 				arg.Artifact)

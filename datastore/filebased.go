@@ -46,7 +46,7 @@ import (
 	"sort"
 	"strings"
 
-	errors "github.com/pkg/errors"
+	"github.com/go-errors/errors"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
@@ -59,6 +59,8 @@ import (
 
 var (
 	file_based_imp = &FileBaseDataStore{}
+
+	datastoreNotConfiguredError = errors.New("Datastore not configured")
 )
 
 const (
@@ -84,21 +86,8 @@ func (self *FileBaseDataStore) GetSubject(
 	serialized_content, err := readContentFromFile(
 		config_obj, urn, true /* must_exist */)
 	if err != nil {
-		// Second try the old DB without json. This support
-		// migration from old protobuf based datastore files
-		// to newer json based blobs while still being able to
-		// read old files.
-		if urn.Type() == api.PATH_TYPE_DATASTORE_JSON {
-			serialized_content, err = readContentFromFile(
-				config_obj,
-				urn.SetType(api.PATH_TYPE_DATASTORE_PROTO),
-				true /* must_exist */)
-		}
-		if err != nil {
-			return errors.WithMessage(os.ErrNotExist,
-				fmt.Sprintf("While opening %v: %v",
-					urn.AsClientPath(), err))
-		}
+		return fmt.Errorf("While opening %v: %w", urn.AsClientPath(),
+			os.ErrNotExist)
 	}
 
 	if len(serialized_content) == 0 {
@@ -113,9 +102,8 @@ func (self *FileBaseDataStore) GetSubject(
 	}
 
 	if err != nil {
-		return errors.WithMessage(os.ErrNotExist,
-			fmt.Sprintf("While opening %v: %v",
-				urn.AsClientPath(), err))
+		return fmt.Errorf("While opening %v: %w",
+			urn.AsClientPath(), os.ErrNotExist)
 	}
 	return nil
 }
@@ -164,7 +152,7 @@ func (self *FileBaseDataStore) SetSubjectWithCompletion(
 	}
 	serialized_content, err := proto.Marshal(message)
 	if err != nil {
-		return errors.WithStack(err)
+		return errors.Wrap(err, 0)
 	}
 
 	return writeContentToFile(config_obj, urn, serialized_content)
@@ -195,7 +183,7 @@ func (self *FileBaseDataStore) DeleteSubject(
 
 	// It is ok to remove a file that does not exist.
 	if err != nil && os.IsExist(err) {
-		return errors.WithStack(err)
+		return errors.Wrap(err, 0)
 	}
 
 	// Note: We do not currently remove empty intermediate
@@ -223,7 +211,7 @@ func listChildren(config_obj *config_proto.Config,
 		if os.IsNotExist(err) {
 			return []os.FileInfo{}, nil
 		}
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, 0)
 	}
 
 	max_dir_size := int(config_obj.Datastore.MaxDirSize)
@@ -308,9 +296,16 @@ func (self *FileBaseDataStore) Close() {}
 func writeContentToFile(config_obj *config_proto.Config,
 	urn api.DSPathSpec, data []byte) error {
 
+	if config_obj.Datastore == nil {
+		return datastoreNotConfiguredError
+	}
+
 	filename := urn.AsDatastoreFilename(config_obj)
+
+	// Truncate the file immediately so we dont need to make a seocnd
+	// syscall.
 	file, err := os.OpenFile(
-		filename, os.O_RDWR|os.O_CREATE, 0660)
+		filename, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0660)
 
 	// Try to create intermediate directories and try again.
 	if err != nil && os.IsNotExist(err) {
@@ -318,7 +313,8 @@ func writeContentToFile(config_obj *config_proto.Config,
 		if err != nil {
 			return err
 		}
-		file, err = os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0660)
+		file, err = os.OpenFile(
+			filename, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0660)
 		if err != nil {
 			return err
 		}
@@ -326,18 +322,13 @@ func writeContentToFile(config_obj *config_proto.Config,
 	if err != nil {
 		logging.GetLogger(config_obj, &logging.FrontendComponent).Error(
 			"Unable to open file %v: %v", filename, err)
-		return errors.WithStack(err)
+		return errors.Wrap(err, 0)
 	}
 	defer file.Close()
 
-	err = file.Truncate(0)
-	if err != nil {
-		return err
-	}
-
 	_, err = file.Write(data)
 	if err != nil {
-		return errors.WithStack(err)
+		return errors.Wrap(err, 0)
 	}
 	return nil
 }
@@ -345,20 +336,51 @@ func writeContentToFile(config_obj *config_proto.Config,
 func readContentFromFile(
 	config_obj *config_proto.Config, urn api.DSPathSpec,
 	must_exist bool) ([]byte, error) {
+
+	if config_obj.Datastore == nil {
+		return nil, datastoreNotConfiguredError
+	}
+
 	file, err := os.Open(urn.AsDatastoreFilename(config_obj))
 	if err == nil {
 		defer file.Close()
 
 		result, err := ioutil.ReadAll(
 			io.LimitReader(file, constants.MAX_MEMORY))
-		return result, errors.WithStack(err)
+		if err != nil {
+			return nil, errors.Wrap(err, 0)
+		}
+
+		return result, nil
+	}
+
+	// Try to read older protobuf based files for backwards
+	// compatibility.
+	if os.IsNotExist(err) &&
+		urn.Type() == api.PATH_TYPE_DATASTORE_JSON {
+
+		file, err := os.Open(urn.
+			SetType(api.PATH_TYPE_DATASTORE_PROTO).
+			AsDatastoreFilename(config_obj))
+
+		if err == nil {
+			defer file.Close()
+
+			result, err := ioutil.ReadAll(
+				io.LimitReader(file, constants.MAX_MEMORY))
+			if err != nil {
+				return nil, errors.Wrap(err, 0)
+			}
+
+			return result, nil
+		}
 	}
 
 	// Its ok if the file does not exist - no error.
 	if !must_exist && os.IsNotExist(err) {
 		return []byte{}, nil
 	}
-	return nil, errors.WithStack(err)
+	return nil, errors.Wrap(err, 0)
 }
 
 // Convert a file name from the data store to a DSPathSpec

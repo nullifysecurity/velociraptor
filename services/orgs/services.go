@@ -11,6 +11,7 @@ import (
 	"www.velocidex.com/golang/velociraptor/file_store"
 	"www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/services"
+	"www.velocidex.com/golang/velociraptor/services/acl_manager"
 	"www.velocidex.com/golang/velociraptor/services/broadcast"
 	"www.velocidex.com/golang/velociraptor/services/client_info"
 	"www.velocidex.com/golang/velociraptor/services/client_monitoring"
@@ -38,21 +39,23 @@ import (
 type ServiceContainer struct {
 	mu sync.Mutex
 
-	frontend             services.FrontendManager
-	journal              services.JournalService
-	client_info_manager  services.ClientInfoManager
-	indexer              services.Indexer
-	broadcast            services.BroadcastService
-	inventory            services.Inventory
-	vfs_service          services.VFSService
-	labeler              services.Labeler
-	repository           services.RepositoryManager
-	hunt_dispatcher      services.IHuntDispatcher
-	launcher             services.Launcher
-	notebook_manager     services.NotebookManager
-	client_event_manager services.ClientEventTable
-	server_event_manager services.ServerEventManager
-	notifier             services.Notifier
+	frontend                services.FrontendManager
+	journal                 services.JournalService
+	client_info_manager     services.ClientInfoManager
+	indexer                 services.Indexer
+	broadcast               services.BroadcastService
+	inventory               services.Inventory
+	vfs_service             services.VFSService
+	labeler                 services.Labeler
+	repository              services.RepositoryManager
+	hunt_dispatcher         services.IHuntDispatcher
+	launcher                services.Launcher
+	notebook_manager        services.NotebookManager
+	client_event_manager    services.ClientEventTable
+	server_event_manager    services.ServerEventManager
+	server_artifact_manager services.ServerArtifactRunner
+	notifier                services.Notifier
+	acl_manager             services.ACLManager
 }
 
 func (self *ServiceContainer) MockFrontendManager(svc services.FrontendManager) {
@@ -92,6 +95,17 @@ func (self *ServiceContainer) ServerEventManager() (services.ServerEventManager,
 	}
 
 	return self.server_event_manager, nil
+}
+
+func (self *ServiceContainer) ServerArtifactRunner() (services.ServerArtifactRunner, error) {
+	self.mu.Lock()
+	defer self.mu.Unlock()
+
+	if self.server_artifact_manager == nil {
+		return nil, errors.New("Server Artifact Runner service not initialized")
+	}
+
+	return self.server_artifact_manager, nil
 }
 
 func (self *ServiceContainer) ClientEventManager() (services.ClientEventTable, error) {
@@ -222,6 +236,16 @@ func (self *ServiceContainer) BroadcastService() (services.BroadcastService, err
 	return self.broadcast, nil
 }
 
+func (self *ServiceContainer) ACLManager() (services.ACLManager, error) {
+	self.mu.Lock()
+	defer self.mu.Unlock()
+
+	if self.acl_manager == nil {
+		return nil, errors.New("ACLManager Service not ready")
+	}
+	return self.acl_manager, nil
+}
+
 // Start all the services for the org and install it in the
 // manager. This function is used both in the client and the server to
 // start all the needed services.
@@ -242,14 +266,15 @@ func (self *OrgManager) startOrg(org_record *api_proto.OrgRecord) (err error) {
 	// not exit the org manager until they all shut down properly.
 	self.parent_wg.Add(1)
 	go func() {
+		defer self.parent_wg.Done()
+
 		<-org_ctx.sm.Ctx.Done()
 		org_ctx.sm.Wg.Wait()
-		self.parent_wg.Done()
 	}()
 
 	self.mu.Lock()
-	self.orgs[org_record.OrgId] = org_ctx
-	self.org_id_by_nonce[org_record.Nonce] = org_record.OrgId
+	self.orgs[org_record.Id] = org_ctx
+	self.org_id_by_nonce[org_record.Nonce] = org_record.Id
 	self.mu.Unlock()
 
 	return self.startOrgFromContext(org_ctx)
@@ -303,7 +328,7 @@ func (self *OrgManager) startRootOrgServices(
 }
 
 func (self *OrgManager) startOrgFromContext(org_ctx *OrgContext) (err error) {
-	org_id := org_ctx.record.OrgId
+	org_id := org_ctx.record.Id
 	org_config := org_ctx.config_obj
 	ctx := org_ctx.sm.Ctx
 	wg := org_ctx.sm.Wg
@@ -311,9 +336,8 @@ func (self *OrgManager) startOrgFromContext(org_ctx *OrgContext) (err error) {
 
 	// If there is no frontend defined we are running as a client.
 	spec := services.ClientServicesSpec()
-	if org_config.Frontend != nil &&
-		org_config.Frontend.ServerServices != nil {
-		spec = org_config.Frontend.ServerServices
+	if org_config.Services != nil {
+		spec = org_config.Services
 	}
 
 	if spec.FrontendServer {
@@ -332,6 +356,17 @@ func (self *OrgManager) startOrgFromContext(org_ctx *OrgContext) (err error) {
 		if err != nil {
 			return err
 		}
+	}
+
+	if spec.UserManager {
+		m, err := acl_manager.NewACLManager(ctx, wg, org_config)
+		if err != nil {
+			return err
+		}
+
+		service_container.mu.Lock()
+		service_container.acl_manager = m
+		service_container.mu.Unlock()
 	}
 
 	// Now start the services for this org. Services depend on other
@@ -404,7 +439,8 @@ func (self *OrgManager) startOrgFromContext(org_ctx *OrgContext) (err error) {
 			// Assume the built in artifacts are OK so we dont need to
 			// validate them at runtime.
 			err = repository.LoadBuiltInArtifacts(ctx, org_config,
-				repo_manager.(*repository.RepositoryManager), false /* validate */)
+				repo_manager.(*repository.RepositoryManager),
+				!services.ValidateArtifact)
 			if err != nil {
 				return err
 			}
@@ -536,10 +572,13 @@ func (self *OrgManager) startOrgFromContext(org_ctx *OrgContext) (err error) {
 	}
 
 	if spec.ServerArtifacts {
-		err = server_artifacts.NewServerArtifactService(ctx, wg, org_config)
+		sm, err := server_artifacts.NewServerArtifactService(ctx, wg, org_config)
 		if err != nil {
 			return err
 		}
+		service_container.mu.Lock()
+		service_container.server_artifact_manager = sm
+		service_container.mu.Unlock()
 	}
 
 	if spec.ClientMonitoring {
@@ -561,6 +600,17 @@ func (self *OrgManager) startOrgFromContext(org_ctx *OrgContext) (err error) {
 
 		service_container.mu.Lock()
 		service_container.server_event_manager = server_event_manager
+		service_container.mu.Unlock()
+	}
+
+	if spec.ServerArtifacts {
+		server_artifact_manager, err := server_artifacts.NewServerArtifactService(ctx, wg, org_config)
+		if err != nil {
+			return err
+		}
+
+		service_container.mu.Lock()
+		service_container.server_artifact_manager = server_artifact_manager
 		service_container.mu.Unlock()
 	}
 
@@ -597,7 +647,9 @@ func maybeFlushFilesOnClose(
 		go func() {
 			defer wg.Done()
 			<-ctx.Done()
-			flusher.Flush()
+			if flusher != nil {
+				flusher.Flush()
+			}
 		}()
 	}
 
@@ -612,7 +664,9 @@ func maybeFlushFilesOnClose(
 		go func() {
 			defer wg.Done()
 			<-ctx.Done()
-			flusher.Flush()
+			if flusher != nil {
+				flusher.Flush()
+			}
 		}()
 	}
 

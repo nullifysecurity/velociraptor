@@ -2,16 +2,15 @@ package sanity
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
 
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/proto"
-	"www.velocidex.com/golang/velociraptor/acls"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
 	artifacts_proto "www.velocidex.com/golang/velociraptor/artifacts/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
@@ -34,9 +33,8 @@ func (self *SanityChecks) CheckRootOrg(
 		config_obj.Logging.OutputDirectory != "" {
 		err := utils.CheckDirWritable(config_obj.Logging.OutputDirectory)
 		if err != nil {
-			return errors.Wrap(
-				err, fmt.Sprintf("Unable to write logs to directory %v: ",
-					config_obj.Logging.OutputDirectory))
+			return fmt.Errorf("Unable to write logs to directory %v: %w",
+				config_obj.Logging.OutputDirectory, err)
 		}
 	}
 
@@ -69,7 +67,7 @@ func (self *SanityChecks) CheckRootOrg(
 	// properly created.
 	if config_obj.Client != nil && config_obj.Client.PinnedServerName != "" {
 		service_account_name := config_obj.Client.PinnedServerName
-		err := acls.GrantRoles(
+		err := services.GrantRoles(
 			config_obj, service_account_name, []string{"administrator"})
 		if err != nil {
 			return err
@@ -100,13 +98,12 @@ func (self *SanityChecks) CheckRootOrg(
 	if config_obj.AutocertCertCache != "" {
 		err := utils.CheckDirWritable(config_obj.AutocertCertCache)
 		if err != nil {
-			return errors.Wrap(
-				err, fmt.Sprintf("Autocert cache directory not writable %v: ",
-					config_obj.AutocertCertCache))
+			return fmt.Errorf("Autocert cache directory not writable %v: %w",
+				config_obj.AutocertCertCache, err)
 		}
 	}
 
-	return checkForServerUpgrade(ctx, config_obj)
+	return nil
 }
 
 func (self *SanityChecks) Check(
@@ -148,7 +145,7 @@ func (self *SanityChecks) Check(
 		return err
 	}
 
-	return nil
+	return checkForServerUpgrade(ctx, config_obj)
 }
 
 // Sets the server metadata to defaults.
@@ -250,7 +247,7 @@ func checkForServerUpgrade(
 		}
 
 		for _, name := range names {
-			artifact, pres := repository.Get(config_obj, name)
+			artifact, pres := repository.Get(ctx, config_obj, name)
 			if !pres {
 				continue
 			}
@@ -268,7 +265,8 @@ func checkForServerUpgrade(
 
 					// If the existing tool definition was overridden
 					// by the admin do not alter it.
-					tool, err := inventory.ProbeToolInfo(tool_definition.Name)
+					tool, err := inventory.ProbeToolInfo(
+						ctx, config_obj, tool_definition.Name)
 					if err == nil && tool.AdminOverride {
 						logger.Info("<red>Skipping update</> of tool <green>%v</> because an admin manually overrode its definition.",
 							tool_definition.Name)
@@ -287,10 +285,11 @@ func checkForServerUpgrade(
 					// when the tool is used next.
 					tool_definition.Hash = ""
 
-					err = inventory.AddTool(
+					err = inventory.AddTool(ctx,
 						config_obj, tool_definition,
 						services.ToolOptions{
-							Upgrade: true,
+							Upgrade:            true,
+							ArtifactDefinition: true,
 						})
 					if err != nil {
 						// Errors are not fatal during upgrade.

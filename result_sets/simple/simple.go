@@ -30,13 +30,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"os"
 	"sync"
 
 	"github.com/Velocidex/json"
 	"github.com/Velocidex/ordereddict"
-	"github.com/pkg/errors"
 	"www.velocidex.com/golang/velociraptor/file_store/api"
 	vjson "www.velocidex.com/golang/velociraptor/json"
 	"www.velocidex.com/golang/velociraptor/result_sets"
@@ -56,6 +56,9 @@ type ResultSetWriterImpl struct {
 
 	sync bool
 }
+
+// Noop for file based result set writers.
+func (self *ResultSetWriterImpl) SetStartRow(i int64) {}
 
 func (self *ResultSetWriterImpl) SetSync() {
 	self.mu.Lock()
@@ -306,40 +309,68 @@ func (self *ResultSetReaderImpl) Rows(ctx context.Context) <-chan *ordereddict.D
 
 		reader := bufio.NewReader(self.fd)
 		for {
+			row_data, err := reader.ReadBytes('\n')
+			if err != nil {
+				return
+			}
+
+			// We have reached the end.
+			if len(row_data) == 0 {
+				return
+			}
+
+			item := ordereddict.NewDict()
+
+			// We failed to unmarshal one line of
+			// JSON - it may be corrupted, go to
+			// the next one.
+			err = item.UnmarshalJSON(row_data)
+			if err != nil {
+				continue
+			}
+
 			select {
 			case <-ctx.Done():
 				return
-
-			default:
-				row_data, err := reader.ReadBytes('\n')
-				if err != nil {
-					return
-				}
-
-				// We have reached the end.
-				if len(row_data) == 0 {
-					return
-				}
-
-				item := ordereddict.NewDict()
-
-				// We failed to unmarshal one line of
-				// JSON - it may be corrupted, go to
-				// the next one.
-				err = item.UnmarshalJSON(row_data)
-				if err != nil {
-					continue
-				}
-
-				output <- item
+			case output <- item:
 			}
 		}
 	}()
 	return output
 }
 
+// Start generating rows from the result set.
+func (self *ResultSetReaderImpl) JSON(ctx context.Context) (<-chan []byte, error) {
+	output := make(chan []byte)
+
+	go func() {
+		defer close(output)
+
+		reader := bufio.NewReader(self.fd)
+		for {
+			row_data, err := reader.ReadBytes('\n')
+			if err != nil {
+				return
+			}
+
+			// We have reached the end.
+			if len(row_data) == 0 {
+				return
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case output <- row_data:
+			}
+		}
+	}()
+
+	return output, nil
+}
+
 // Only used in tests - not safe for general use.
-func (self *ResultSetReaderImpl) GetAllResults() []*ordereddict.Dict {
+func GetAllResults(self result_sets.ResultSetReader) []*ordereddict.Dict {
 	result := []*ordereddict.Dict{}
 	for row := range self.Rows(context.Background()) {
 		result = append(result, row)

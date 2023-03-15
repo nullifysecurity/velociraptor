@@ -2,6 +2,7 @@ package journal_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -10,7 +11,6 @@ import (
 	"github.com/Velocidex/ordereddict"
 	"github.com/alecthomas/assert"
 	"github.com/golang/mock/gomock"
-	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -50,8 +50,8 @@ type ReplicationTestSuite struct {
 func (self *ReplicationTestSuite) SetupTest() {
 	self.ConfigObj = self.TestSuite.LoadConfig()
 	self.ConfigObj.Frontend.IsMinion = true
-	self.ConfigObj.Frontend.ServerServices.FrontendServer = false
-	self.ConfigObj.Frontend.ServerServices.ReplicationService = true
+	self.ConfigObj.Services.FrontendServer = false
+	self.ConfigObj.Services.ReplicationService = true
 
 	self.LoadArtifacts([]string{`
 name: Test.Artifact
@@ -173,7 +173,7 @@ func (self *ReplicationTestSuite) TestSendingEvents() {
 		Set("Events", []interface{}{"Test.Artifact"}))
 
 	events = nil
-	err = journal_service.PushRowsToArtifact(self.ConfigObj,
+	err = journal_service.PushRowsToArtifact(self.Ctx, self.ConfigObj,
 		my_event, "Test.Artifact", "C.1234", "F.123")
 	assert.NoError(self.T(), err)
 
@@ -199,7 +199,7 @@ func (self *ReplicationTestSuite) TestSendingEvents() {
 	// is often on the critical path. We just dump 1000 messages
 	// into the queue - this should overflow into the file.
 	for i := 0; i < 1000; i++ {
-		err = journal_service.PushRowsToArtifact(self.ConfigObj,
+		err = journal_service.PushRowsToArtifact(self.Ctx, self.ConfigObj,
 			my_event, "Test.Artifact", "C.1234", "F.123")
 		assert.NoError(self.T(), err)
 	}

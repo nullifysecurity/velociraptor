@@ -23,12 +23,12 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
 	"sync"
 
-	errors "github.com/pkg/errors"
 	"www.velocidex.com/golang/velociraptor/acls"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
@@ -63,7 +63,7 @@ const (
   "showFoldWidgets":true,
   "displayIndentGuides":true,
   "showGutter":true,
-  "fontSize":14,
+  "fontSize":20,
   "fontFamily":"monospace",
   "scrollPastEnd":0,
   "theme":"ace/theme/xcode",
@@ -89,6 +89,10 @@ const (
   "enableLiveAutocompletion":true}`
 )
 
+var (
+	validUsernameRegEx = regexp.MustCompile("^[a-zA-Z0-9@.\\-_#+]+$")
+)
+
 type UserManager struct {
 	ca_pool *x509.CertPool
 
@@ -97,10 +101,33 @@ type UserManager struct {
 	config_obj *config_proto.Config
 }
 
-func NewUserRecord(name string) (*api_proto.VelociraptorUser, error) {
-	if !regexp.MustCompile("^[a-zA-Z0-9@.\\-_#+]+$").MatchString(name) {
-		return nil, errors.New(fmt.Sprintf(
-			"Unacceptable username %v", name))
+func validateUsername(config_obj *config_proto.Config, name string) error {
+	if !validUsernameRegEx.MatchString(name) {
+		return fmt.Errorf("Unacceptable username %v", name)
+	}
+
+	if config_obj.API != nil &&
+		config_obj.API.PinnedGwName == name {
+		return fmt.Errorf("Unacceptable username %v", name)
+	}
+
+	if config_obj.Client != nil &&
+		config_obj.Client.PinnedServerName == name {
+		return fmt.Errorf("Unacceptable username %v", name)
+	}
+
+	if name == "GRPC_GW" || name == "VelociraptorServer" {
+		return fmt.Errorf("Unacceptable username %v", name)
+	}
+
+	return nil
+}
+
+func NewUserRecord(config_obj *config_proto.Config,
+	name string) (*api_proto.VelociraptorUser, error) {
+	err := validateUsername(config_obj, name)
+	if err != nil {
+		return nil, err
 	}
 	return &api_proto.VelociraptorUser{Name: name}, nil
 }
@@ -128,6 +155,12 @@ func (self UserManager) SetUser(
 	if user_record.Name == "" {
 		return errors.New("Must set a username")
 	}
+
+	err := validateUsername(self.config_obj, user_record.Name)
+	if err != nil {
+		return err
+	}
+
 	db, err := datastore.GetDB(self.config_obj)
 	if err != nil {
 		return err
@@ -177,18 +210,19 @@ func normalizeOrgList(user_record *api_proto.VelociraptorUser) error {
 
 	// Fill in the org names if needed
 	for _, org_record := range org_manager.ListOrgs() {
-		org_config_obj, err := org_manager.GetOrgConfig(org_record.OrgId)
+		org_config_obj, err := org_manager.GetOrgConfig(org_record.Id)
 		if err != nil {
 			continue
 		}
 
-		ok, _ := acls.CheckAccess(org_config_obj, user_record.Name, acls.READ_RESULTS)
+		ok, _ := services.CheckAccess(org_config_obj,
+			user_record.Name, acls.READ_RESULTS)
 		if !ok {
 			continue
 		}
 
-		user_record.Orgs = append(user_record.Orgs, &api_proto.Org{
-			Id:   org_record.OrgId,
+		user_record.Orgs = append(user_record.Orgs, &api_proto.OrgRecord{
+			Id:   org_record.Id,
 			Name: org_record.Name,
 		})
 	}
@@ -227,6 +261,12 @@ func (self UserManager) GetUserWithHashes(ctx context.Context, username string) 
 	if username == "" {
 		return nil, errors.New("Must set a username")
 	}
+
+	err := validateUsername(self.config_obj, username)
+	if err != nil {
+		return nil, err
+	}
+
 	db, err := datastore.GetDB(self.config_obj)
 	if err != nil {
 		return nil, err
@@ -321,7 +361,20 @@ func (self UserManager) GetUserOptions(ctx context.Context, username string) (
 	// not override the configured link from the default and it will
 	// be ignored.
 
-	return options, err
+	defaults := &config_proto.Defaults{}
+	if self.config_obj.Defaults != nil {
+		defaults = self.config_obj.Defaults
+	}
+
+	options.DisableServerEvents = defaults.DisableServerEvents
+	options.DisableQuarantineButton = defaults.DisableQuarantineButton
+
+	// Specify a default theme if specified in the config file.
+	if options.Theme == "" {
+		options.Theme = defaults.DefaultTheme
+	}
+
+	return options, nil
 }
 
 func StartUserManager(

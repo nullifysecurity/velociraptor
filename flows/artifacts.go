@@ -1,3 +1,7 @@
+// NOTE: This file implements the old Client communication protocol. It is
+// here to provide backwards communication with older clients and will
+// eventually be removed.
+
 /*
    Velociraptor - Dig Deeper
    Copyright (C) 2019-2022 Rapid7 Inc.
@@ -18,7 +22,6 @@
 package flows
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -26,7 +29,7 @@ import (
 	"time"
 
 	"github.com/Velocidex/ordereddict"
-	errors "github.com/pkg/errors"
+	errors "github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/protobuf/proto"
@@ -58,7 +61,9 @@ var (
 		Help: "Total bytes of Uploaded Files.",
 	})
 
-	notModified = errors.New("Not modified")
+	notModified      = errors.New("Not modified")
+	invalidSessionId = errors.New("Invalid SessionId")
+	invalidClientId  = errors.New("Invalid ClientId")
 )
 
 // The CollectionContext tracks collections as they are being
@@ -75,7 +80,7 @@ type CollectionContext struct {
 
 	// We batch all monitoring JSONL rows and then flush them at the
 	// end.
-	monitoring_batch map[string]*bytes.Buffer
+	monitoring_batch map[string]*jsonBatch
 
 	// The completer keeps track of all asynchronous filesystem
 	// operations that will occur so that when everything is written
@@ -91,10 +96,11 @@ type CollectionContext struct {
 	send_update bool
 }
 
-func NewCollectionContext(config_obj *config_proto.Config) *CollectionContext {
+func NewCollectionContext(
+	ctx context.Context, config_obj *config_proto.Config) *CollectionContext {
 	self := &CollectionContext{
 		ArtifactCollectorContext: flows_proto.ArtifactCollectorContext{},
-		monitoring_batch:         make(map[string]*bytes.Buffer),
+		monitoring_batch:         make(map[string]*jsonBatch),
 	}
 
 	// If we need to send a notification we should wait until all parts of
@@ -124,7 +130,7 @@ func NewCollectionContext(config_obj *config_proto.Config) *CollectionContext {
 
 		journal, err := services.GetJournal(config_obj)
 		if err == nil {
-			journal.PushRowsToArtifactAsync(
+			journal.PushRowsToArtifactAsync(ctx,
 				config_obj, row, "System.Flow.Completion")
 		}
 	})
@@ -221,7 +227,7 @@ func closeContext(
 	}
 
 	if len(collection_context.Logs) > 0 {
-		err := flushContextLogs(
+		err := flushContextLogs(ctx,
 			config_obj, collection_context, collection_context.completer)
 		if err != nil {
 			collection_context.State = flows_proto.ArtifactCollectorContext_ERROR
@@ -241,7 +247,7 @@ func closeContext(
 	}
 
 	if len(collection_context.monitoring_batch) > 0 {
-		err = flushMonitoringLogs(config_obj, collection_context)
+		err = flushMonitoringLogs(ctx, config_obj, collection_context)
 		if err != nil {
 			collection_context.State = flows_proto.ArtifactCollectorContext_ERROR
 			collection_context.Status = err.Error()
@@ -292,6 +298,7 @@ func flushContextUploadedFiles(
 			Set("Timestamp", time.Now().UTC().Unix()).
 			Set("started", time.Now().UTC().String()).
 			Set("vfs_path", row.Name).
+			Set("_Components", row.Components).
 			Set("file_size", row.Size).
 			Set("uploaded_size", row.StoredSize))
 	}
@@ -303,11 +310,11 @@ func flushContextUploadedFiles(
 
 // Load the collector context from storage.
 func LoadCollectionContext(
-	config_obj *config_proto.Config,
+	ctx context.Context, config_obj *config_proto.Config,
 	client_id, flow_id string) (*CollectionContext, error) {
 
 	if flow_id == constants.MONITORING_WELL_KNOWN_FLOW {
-		result := NewCollectionContext(config_obj)
+		result := NewCollectionContext(ctx, config_obj)
 		result.SessionId = flow_id
 		result.ClientId = client_id
 
@@ -315,7 +322,7 @@ func LoadCollectionContext(
 	}
 
 	flow_path_manager := paths.NewFlowPathManager(client_id, flow_id)
-	collection_context := NewCollectionContext(config_obj)
+	collection_context := NewCollectionContext(ctx, config_obj)
 	db, err := datastore.GetDB(config_obj)
 	if err != nil {
 		return nil, err
@@ -338,7 +345,7 @@ func LoadCollectionContext(
 
 // Process an incoming message from the client.
 func ArtifactCollectorProcessOneMessage(
-	config_obj *config_proto.Config,
+	ctx context.Context, config_obj *config_proto.Config,
 	collection_context *CollectionContext,
 	message *crypto_proto.VeloMessage) error {
 
@@ -360,7 +367,7 @@ func ArtifactCollectorProcessOneMessage(
 	// Handle the response depending on the RequestId
 	switch message.RequestId {
 	case constants.TransferWellKnownFlowId:
-		return appendUploadDataToFile(
+		return appendUploadDataToFile(ctx,
 			config_obj, collection_context, message)
 
 	case constants.ProcessVQLResponses:
@@ -381,7 +388,7 @@ func ArtifactCollectorProcessOneMessage(
 		rows_written := uint64(0)
 		if response.Query.Name != "" {
 			path_manager, err := artifact_paths.NewArtifactPathManager(
-				config_obj,
+				ctx, config_obj,
 				collection_context.Request.ClientId,
 				collection_context.SessionId,
 				response.Query.Name)
@@ -464,7 +471,6 @@ func CheckForStatus(
 	// Update our record of all the status messages from this
 	// collection.
 	updateQueryStats(config_obj, collection_context, message.Status)
-	UpdateFlowStats(collection_context)
 
 	// Update the active time for each response.
 	collection_context.ActiveTime = uint64(time.Now().UnixNano() / 1000)
@@ -479,7 +485,7 @@ func CheckForStatus(
 }
 
 func appendUploadDataToFile(
-	config_obj *config_proto.Config,
+	ctx context.Context, config_obj *config_proto.Config,
 	collection_context *CollectionContext,
 	message *crypto_proto.VeloMessage) error {
 
@@ -496,7 +502,8 @@ func appendUploadDataToFile(
 	// Figure out where to store the file.
 	file_path_manager := flow_path_manager.GetUploadsFile(
 		file_buffer.Pathspec.Accessor,
-		file_buffer.Pathspec.Path)
+		file_buffer.Pathspec.Path,
+		file_buffer.Pathspec.Components)
 
 	fd, err := file_store_factory.WriteFile(file_path_manager.Path())
 	if err != nil {
@@ -529,7 +536,7 @@ func appendUploadDataToFile(
 		collection_context.UploadedFiles = append(
 			collection_context.UploadedFiles,
 			&flows_proto.ArtifactUploadedFileInfo{
-				Name:       file_path_manager.Path().AsClientPath(),
+				Name:       file_path_manager.VisibleVFSPath(),
 				Components: file_path_manager.Path().Components(),
 				Size:       file_buffer.Size,
 				StoredSize: size,
@@ -573,12 +580,11 @@ func appendUploadDataToFile(
 		collection_context.UploadedFiles = append(
 			collection_context.UploadedFiles,
 			&flows_proto.ArtifactUploadedFileInfo{
-				Name: file_path_manager.IndexPath().
-					AsClientPath(),
-				Components: file_path_manager.IndexPath().
-					Components(),
+				Name:       file_path_manager.VisibleVFSPath() + ".idx",
+				Components: file_path_manager.IndexPath().Components(),
 				Size:       uint64(len(data)),
 				StoredSize: uint64(len(data)),
+				Type:       "idx",
 			})
 		collection_context.Dirty = true
 	}
@@ -602,7 +608,7 @@ func appendUploadDataToFile(
 			return err
 		}
 
-		return journal.PushRowsToArtifact(config_obj,
+		return journal.PushRowsToArtifact(ctx, config_obj,
 			[]*ordereddict.Dict{row},
 			"System.Upload.Completion",
 			message.Source, collection_context.SessionId,
@@ -616,9 +622,16 @@ func appendUploadDataToFile(
 // the message.
 func LogMessage(config_obj *config_proto.Config,
 	collection_context *CollectionContext,
-	msg *crypto_proto.LogMessage) {
+	msg *crypto_proto.LogMessage) error {
 	log_msg := artifacts.DeobfuscateString(config_obj, msg.Message)
 	artifact_name := artifacts.DeobfuscateString(config_obj, msg.Artifact)
+
+	// Newer clients send a combined log JSONL packet which we can
+	// just write at once.
+	if len(msg.Jsonl) > 0 {
+		return writeLogMessages(config_obj, collection_context, msg)
+	}
+
 	collection_context.Logs = append(
 		collection_context.Logs, &crypto_proto.LogMessage{
 			Message:   log_msg,
@@ -627,6 +640,8 @@ func LogMessage(config_obj *config_proto.Config,
 			Timestamp: msg.Timestamp,
 		})
 	collection_context.Dirty = true
+
+	return nil
 }
 
 func Log(config_obj *config_proto.Config,
@@ -649,7 +664,11 @@ type FlowRunner struct {
 	config_obj  *config_proto.Config
 }
 
-func NewFlowRunner(config_obj *config_proto.Config) *FlowRunner {
+// A flow runner compatible with old clients. This runner manages flow
+// state on the server which is less efficient. Modern clients
+// (>0.6.7) will manage flows client side and so we will use
+// the more efficient ClientFlowRunner instead.
+func NewLegacyFlowRunner(config_obj *config_proto.Config) *FlowRunner {
 	return &FlowRunner{
 		config_obj:  config_obj,
 		context_map: make(map[string]*CollectionContext),
@@ -672,11 +691,11 @@ func (self *FlowRunner) Close(ctx context.Context) {
 
 func (self *FlowRunner) ProcessSingleMessage(
 	ctx context.Context,
-	job *crypto_proto.VeloMessage) {
+	job *crypto_proto.VeloMessage) error {
 
 	// Only process real flows.
 	if !strings.HasPrefix(job.SessionId, "F.") {
-		return
+		return nil
 	}
 
 	// json.TraceMessage(job.Source+"_job", job)
@@ -685,7 +704,7 @@ func (self *FlowRunner) ProcessSingleMessage(
 	// message arrives here, it is authenticated and the client is
 	// fully enrolled so it serves no purpose here - Just ignore it.
 	if job.CSR != nil {
-		return
+		return nil
 	}
 
 	logger := logging.GetLogger(self.config_obj, &logging.FrontendComponent)
@@ -695,69 +714,79 @@ func (self *FlowRunner) ProcessSingleMessage(
 
 		if job.SessionId == "" {
 			logger.Error("Empty SessionId: %v", job)
-			return
+			return invalidSessionId
 		}
 
+		// Should never happen because source is filled in from the
+		// crypto envelope.
 		if job.Source == "" {
-			panic(1)
+			logger.Error("Empty Source: %v", job)
+			return invalidClientId
 		}
 
-		collection_context, err = LoadCollectionContext(
+		collection_context, err = LoadCollectionContext(ctx,
 			self.config_obj, job.Source, job.SessionId)
 		if err != nil {
 			// Ignore logs and status messages from the
 			// client. These are generated by cancel
 			// requests anyway.
 			if job.LogMessage != nil || job.Status != nil {
-				return
+				return nil
 			}
 
 			logger.Error(fmt.Sprintf("Unable to load flow %s: %v", job.SessionId, err))
 
 			client_manager, err := services.GetClientInfoManager(self.config_obj)
 			if err != nil {
-				return
+				return err
 			}
 
+			// Flow does not exist cancel the corresponding flow on the client.
 			err = client_manager.QueueMessageForClient(ctx, job.Source,
 				&crypto_proto.VeloMessage{
 					Cancel:    &crypto_proto.Cancel{},
 					SessionId: job.SessionId,
 				},
-				true /* notify */, nil)
+				services.NOTIFY_CLIENT, utils.BackgroundWriter)
 			if err != nil {
-				logger.Error("Queueing for client %v: %v",
+				return fmt.Errorf("Queueing for client %v: %w",
 					job.Source, err)
 			}
-			return
+			return nil
 		}
 		self.context_map[job.SessionId] = collection_context
 	}
 
 	if collection_context == nil {
-		return
+		return nil
 	}
 
 	if job.LogMessage != nil {
-		LogMessage(self.config_obj, collection_context, job.LogMessage)
-		return
+		err := LogMessage(self.config_obj, collection_context, job.LogMessage)
+		if err != nil {
+			Log(self.config_obj, collection_context,
+				fmt.Sprintf("LogMessage: %v", err))
+		}
+		return err
 	}
 
 	if job.SessionId == constants.MONITORING_WELL_KNOWN_FLOW {
-		err := MonitoringProcessMessage(self.config_obj, collection_context, job)
+		err := MonitoringProcessMessage(
+			ctx, self.config_obj, collection_context, job)
 		if err != nil {
 			Log(self.config_obj, collection_context,
 				fmt.Sprintf("MonitoringProcessMessage: %v", err))
 		}
-		return
+		return err
 	}
 
-	err := ArtifactCollectorProcessOneMessage(
+	err := ArtifactCollectorProcessOneMessage(ctx,
 		self.config_obj, collection_context, job)
 	if err != nil {
 		Log(self.config_obj, collection_context,
 			fmt.Sprintf("While processing job %v", err))
 	}
+	return err
 }
 
 func (self *FlowRunner) ProcessMessages(ctx context.Context,
@@ -773,5 +802,5 @@ func (self *FlowRunner) ProcessMessages(ctx context.Context,
 		logger.Error("ForemanCheckin for client %v: %v", message_info.Source, err)
 	}
 
-	return message_info.IterateJobs(ctx, self.ProcessSingleMessage)
+	return message_info.IterateJobs(ctx, self.config_obj, self.ProcessSingleMessage)
 }

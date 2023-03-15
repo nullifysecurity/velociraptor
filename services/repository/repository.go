@@ -30,7 +30,7 @@ import (
 	"sync"
 
 	"github.com/Velocidex/yaml/v2"
-	errors "github.com/pkg/errors"
+	"github.com/go-errors/errors"
 	"google.golang.org/protobuf/proto"
 	"www.velocidex.com/golang/velociraptor/acls"
 	artifacts_proto "www.velocidex.com/golang/velociraptor/artifacts/proto"
@@ -41,10 +41,6 @@ import (
 	utils "www.velocidex.com/golang/velociraptor/utils"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/vfilter"
-)
-
-var (
-	artifactNameRegex = regexp.MustCompile("^[a-zA-Z0-9_.]+$")
 )
 
 // Holds multiple artifact definitions.
@@ -59,6 +55,8 @@ type Repository struct {
 	parent_config_obj *config_proto.Config
 }
 
+// A Parent repository is another repository we can delegate to if we
+// dont have the artifact definition we require.
 func (self *Repository) SetParent(
 	parent services.Repository, parent_config_obj *config_proto.Config) {
 	self.mu.Lock()
@@ -103,7 +101,7 @@ func (self *Repository) LoadDirectory(
 	err := filepath.Walk(dirname,
 		func(file_path string, info os.FileInfo, err error) error {
 			if err != nil {
-				return errors.WithStack(err)
+				return errors.Wrap(err, 0)
 			}
 
 			if !info.IsDir() && (strings.HasSuffix(info.Name(), ".yaml") ||
@@ -114,8 +112,7 @@ func (self *Repository) LoadDirectory(
 					return nil
 				}
 				_, err = self.LoadYaml(string(data),
-					false, /* validate */
-					override_builtins)
+					!services.ValidateArtifact, override_builtins)
 				if err != nil {
 					logger.Error("Could not load %s: %s", info.Name(), err)
 					return nil
@@ -165,7 +162,7 @@ func (self *Repository) LoadYaml(data string, validate, built_in bool) (
 	artifact := &artifacts_proto.Artifact{}
 	err := yaml.UnmarshalStrict([]byte(sanitize_artifact_yaml(data)), artifact)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, 0)
 	}
 
 	artifact.Raw = data
@@ -184,9 +181,9 @@ func (self *Repository) LoadProto(artifact *artifacts_proto.Artifact, validate b
 	// Make a copy of the artifact to store in the repository.
 	artifact = proto.Clone(artifact).(*artifacts_proto.Artifact)
 
-	if !artifactNameRegex.MatchString(artifact.Name) {
-		return nil, errors.New(
-			"Invalid artifact name. Can only contain characted in this set 'a-zA-Z0-9_.'")
+	err := validateArtifactName(artifact.Name)
+	if err != nil {
+		return nil, err
 	}
 
 	// Validate the artifact.
@@ -200,8 +197,16 @@ func (self *Repository) LoadProto(artifact *artifacts_proto.Artifact, validate b
 
 		case "html": // HTML reports form a main HTML page for report exports.
 		default:
-			return nil, errors.New(fmt.Sprintf("Invalid report type %s",
-				report.Type))
+			return nil, fmt.Errorf("Invalid report type %s", report.Type)
+		}
+	}
+
+	// Make sure none of the aliases already exist
+	for _, alias := range artifact.Aliases {
+		_, pres := self.Data[alias]
+		if pres {
+			return nil, fmt.Errorf("%s: Artifact Alias is already taken %s",
+				artifact.Name, alias)
 		}
 	}
 
@@ -294,19 +299,17 @@ func (self *Repository) LoadProto(artifact *artifacts_proto.Artifact, validate b
 			for idx2, vql := range queries {
 				if idx2 < len(queries)-1 {
 					if vql.Let == "" {
-						return nil, errors.New(
-							"Invalid artifact " + artifact.Name +
-								": All Queries in a source " +
-								"must be LET queries, except for the " +
-								"final one.")
+						return nil, fmt.Errorf(
+							"Invalid artifact %s: All Queries in a source "+
+								"must be LET queries, except for the "+
+								"final one.", artifact.Name)
 					}
 				} else {
 					if vql.Let != "" {
-						return nil, errors.New(
-							"Invalid artifact " + artifact.Name +
-								": All Queries in a source " +
-								"must be LET queries, except for the " +
-								"final one.")
+						return nil, fmt.Errorf(
+							"Invalid artifact  %s: All Queries in a source "+
+								"must be LET queries, except for the "+
+								"final one.", artifact.Name)
 					}
 				}
 			}
@@ -343,14 +346,22 @@ func (self *Repository) LoadProto(artifact *artifacts_proto.Artifact, validate b
 
 	self.mu.Lock()
 	self.Data[artifact.Name] = artifact
+	for _, alias := range artifact.Aliases {
+		// Make a copy of the artifact definition
+		artifact_copy := proto.Clone(artifact).(*artifacts_proto.Artifact)
+		artifact_copy.Name = alias
+		artifact_copy.IsAlias = true
+		self.Data[alias] = artifact_copy
+	}
 	self.mu.Unlock()
 
 	return artifact, nil
 }
 
 func (self *Repository) GetArtifactType(
-	config_obj *config_proto.Config, artifact_name string) (string, error) {
-	artifact, pres := self.Get(config_obj, artifact_name)
+	ctx context.Context, config_obj *config_proto.Config,
+	artifact_name string) (string, error) {
+	artifact, pres := self.Get(ctx, config_obj, artifact_name)
 	if !pres {
 		return "", fmt.Errorf("Artifact %s not known", artifact_name)
 	}
@@ -359,9 +370,10 @@ func (self *Repository) GetArtifactType(
 }
 
 func (self *Repository) GetSource(
-	config_obj *config_proto.Config, name string) (*artifacts_proto.ArtifactSource, bool) {
+	ctx context.Context, config_obj *config_proto.Config,
+	name string) (*artifacts_proto.ArtifactSource, bool) {
 	artifact_name, source_name := paths.SplitFullSourceName(name)
-	artifact, pres := self.Get(config_obj, artifact_name)
+	artifact, pres := self.Get(ctx, config_obj, artifact_name)
 	if !pres {
 		return nil, false
 	}
@@ -375,7 +387,8 @@ func (self *Repository) GetSource(
 }
 
 func (self *Repository) Get(
-	config_obj *config_proto.Config, name string) (*artifacts_proto.Artifact, bool) {
+	ctx context.Context, config_obj *config_proto.Config,
+	name string) (*artifacts_proto.Artifact, bool) {
 	self.mu.Lock()
 	cached_artifact, pres := self.get(name)
 	if !pres {
@@ -383,7 +396,7 @@ func (self *Repository) Get(
 
 		// If we have a parent repository just get it from there.
 		if self.parent != nil {
-			return self.parent.Get(self.parent_config_obj, name)
+			return self.parent.Get(ctx, self.parent_config_obj, name)
 		}
 		return nil, false
 	}
@@ -398,7 +411,7 @@ func (self *Repository) Get(
 
 	// Delay processing until we need it. This means loading
 	// artifacts is faster.
-	err := compileArtifact(config_obj, result)
+	err := compileArtifact(ctx, config_obj, result)
 	if err != nil {
 		logger := logging.GetLogger(config_obj, &logging.GenericComponent)
 		logger.Error("While compiling artifact %v: %v", name, err)
@@ -407,7 +420,10 @@ func (self *Repository) Get(
 
 	// Store the compiled version in the repository for next time.
 	self.mu.Lock()
-	self.Data[result.Name] = result
+	_, pres = self.Data[name]
+	if pres {
+		self.Data[name] = result
+	}
 	self.mu.Unlock()
 
 	return result, true
@@ -499,12 +515,12 @@ func Parse(filename string) (*artifacts_proto.Artifact, error) {
 	result := &artifacts_proto.Artifact{}
 	data, err := ioutil.ReadFile(filename)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, 0)
 	}
 
 	err = yaml.UnmarshalStrict(data, result)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, 0)
 	}
 	result.Raw = string(data)
 
@@ -520,15 +536,16 @@ func splitQueryToQueries(query string) ([]string, error) {
 	scope := vql_subsystem.MakeScope()
 	result := []string{}
 	for _, vql := range vqls {
-		result = append(result, vql.ToString(scope))
+		result = append(result, vfilter.FormatToString(scope, vql))
 	}
 
 	return result, nil
 }
 
 func compileArtifact(
-	config_obj *config_proto.Config,
+	ctx context.Context, config_obj *config_proto.Config,
 	artifact *artifacts_proto.Artifact) error {
+
 	if artifact.Compiled {
 		return nil
 	}
@@ -539,12 +556,20 @@ func compileArtifact(
 			// removing any comments.
 			queries, err := splitQueryToQueries(source.Query)
 			if err != nil {
-				return err
+				return fmt.Errorf("While compiling %v/%v: %w",
+					artifact.Name, source.Name, err)
 			}
 			source.Queries = queries
 		}
 	}
+	artifact.Compiled = true
 
+	return updateTools(ctx, config_obj, artifact)
+}
+
+func updateTools(
+	ctx context.Context, config_obj *config_proto.Config,
+	artifact *artifacts_proto.Artifact) error {
 	// Make sure tools are all defined.
 	inventory, err := services.GetInventory(config_obj)
 	if err != nil {
@@ -552,15 +577,37 @@ func compileArtifact(
 	}
 
 	for _, tool := range artifact.Tools {
-		err := inventory.AddTool(
-			config_obj, tool,
-			services.ToolOptions{Upgrade: true})
+		tool_request := proto.Clone(tool).(*artifacts_proto.Tool)
+		tool_request.Artifact = artifact.Name
+		err := inventory.AddTool(ctx, config_obj, tool_request,
+			services.ToolOptions{
+				Upgrade:            true,
+				ArtifactDefinition: true,
+			})
 		if err != nil {
 			return err
 		}
 	}
+	return nil
+}
 
-	artifact.Compiled = true
+var (
+	artifactNameRegex      = regexp.MustCompile("^[a-zA-Z0-9_.]+$")
+	artifactComponentRegex = regexp.MustCompile("^[0-9]")
+)
+
+func validateArtifactName(name string) error {
+	if !artifactNameRegex.MatchString(name) {
+		return errors.New(
+			"Invalid artifact name. Can only contain characted in this set 'a-zA-Z0-9_.'")
+	}
+
+	for _, part := range strings.Split(name, ".") {
+		if artifactComponentRegex.MatchString(part) {
+			return errors.New(
+				"Invalid artifact name. Name parts can not start with a number'")
+		}
+	}
 
 	return nil
 }

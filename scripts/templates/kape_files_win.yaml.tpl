@@ -50,6 +50,11 @@ parameters:
     description: Normally we prefer to use lazy_ntfs for speed. Sometimes this might miss stuff so setting this will fallback to the regular ntfs accessor.
     type: bool
 
+  - name: NTFS_CACHE_TIME
+    type: int
+    description: How often to flush the NTFS cache. (Default is never).
+    default: "1000000"
+
 sources:
   - name: All File Metadata
     query: |
@@ -79,7 +84,7 @@ sources:
       LET all_results <= SELECT * FROM if(
            condition=VSSAnalysis,
            then={
-             SELECT * FROM chain(
+             SELECT * FROM chain(async=TRUE,
                a={
                    -- For VSS we always need to parse NTFS
                    SELECT * FROM Artifact.Windows.Collectors.VSS(
@@ -93,7 +98,7 @@ sources:
                       collectionSpec=rule_specs_lazy_ntfs)
                })
            }, else={
-             SELECT * FROM chain(
+             SELECT * FROM chain(async=TRUE,
                a={
 
                    -- Special files we access with the ntfs parser.

@@ -42,6 +42,8 @@ var (
 		"crypto/b0x.yaml":           "crypto/ab0x.go",
 	}
 
+	index_template = "gui/velociraptor/build/index.html"
+
 	// apt-get install gcc-mingw-w64-x86-64
 	mingw_xcompiler = "x86_64-w64-mingw32-gcc"
 
@@ -282,6 +284,11 @@ func PPCLinux() error {
 	}.Run()
 }
 
+func Version() error {
+	fmt.Println(constants.VERSION)
+	return nil
+}
+
 func Arm() error {
 	return Builder{
 		extra_tags:  " release yara ",
@@ -448,6 +455,12 @@ func fileb0x(asset string) error {
 }
 
 func ensure_assets() error {
+	// Fixup the vite build - this is a hack but i cant figure vite
+	// now.
+	replace_string_in_file(
+		index_template, `="/app/assets/index`,
+		`="{{.BasePath}}/app/assets/index`)
+
 	for asset, target := range assets {
 		before := timestamp_of(target)
 		err := fileb0x(asset)

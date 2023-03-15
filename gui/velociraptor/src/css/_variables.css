@@ -8,8 +8,8 @@
     --color-sidebar-active-foreground: #f0f0f0;
     --color-sidebar-active-background: #8f8f8f;
 
-    --font-json: roboto-mono, Menlo, Monaco, Consolas, "Courier New", monospace;
-    --font-monospace: roboto-mono, "Courier New", Courier, monospace;
+    --font-json: "Iosevka Term", Menlo, Monaco, Consolas, "Courier New", monospace;
+    --font-monospace: "Iosevka Term", "Courier New", Courier, monospace;
 
     --color-calendar-background: #f0f0f0;
     --background-calendar-tile-now: #feffe0;
@@ -79,6 +79,7 @@
 
     --color-vfs-files-timestomped: #bbdfff;
 
+    --accent-color:  #0096ff;
     --color-accent: #0096ff;
     --color-accent-100: #0096ff;
     --color-accent-75: #0096ffb0;

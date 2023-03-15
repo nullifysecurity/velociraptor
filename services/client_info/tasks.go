@@ -14,6 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/protobuf/proto"
+	actions_proto "www.velocidex.com/golang/velociraptor/actions/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	crypto_proto "www.velocidex.com/golang/velociraptor/crypto/proto"
 	"www.velocidex.com/golang/velociraptor/datastore"
@@ -113,7 +114,7 @@ func (self *ClientInfoManager) QueueMessagesForClient(
 	// When the completer is done send a message to all the minions
 	// that the tasks are ready to be read.
 	completer := utils.NewCompleter(func() {
-		journal.PushRowsToArtifactAsync(self.config_obj,
+		journal.PushRowsToArtifactAsync(ctx, self.config_obj,
 			ordereddict.NewDict().
 				Set("ClientId", client_id).
 				Set("Notify", notify),
@@ -170,7 +171,7 @@ func (self *ClientInfoManager) QueueMessageForClient(
 				completion()
 			}
 
-			journal.PushRowsToArtifactAsync(self.config_obj,
+			journal.PushRowsToArtifactAsync(ctx, self.config_obj,
 				ordereddict.NewDict().
 					Set("ClientId", client_id).
 					Set("Notify", notify),
@@ -287,6 +288,35 @@ func (self *ClientInfoManager) GetClientTasks(
 		if err != nil {
 			return nil, err
 		}
+
+		// Handle backwards compatibility with older clients by expanding
+		// FlowRequest into separate VQLClientActions. Newer clients will
+		// ignore bare VQLClientActions and older clients will ignore
+		// FlowRequest.
+		if message.FlowRequest != nil &&
+			len(message.FlowRequest.VQLClientActions) > 0 {
+
+			// Tack the first VQLClientAction on top of the
+			// FlowRequest for backwards compatibility. Newer clients
+			// procees FlowRequest first and ignore VQLClientAction
+			// while older clients will process the VQLClientAction
+			// and ignore the FlowRequest message. In both cases the
+			// message will be valid.
+			message.VQLClientAction = proto.Clone(
+				message.FlowRequest.VQLClientActions[0]).(*actions_proto.VQLCollectorArgs)
+
+			// Send the rest of the VQLClientAction as distinct messages.
+			for idx, request := range message.FlowRequest.VQLClientActions {
+				if idx > 0 {
+					result = append(result, &crypto_proto.VeloMessage{
+						SessionId:       message.SessionId,
+						RequestId:       message.RequestId,
+						VQLClientAction: request,
+					})
+				}
+			}
+		}
+
 		result = append(result, message)
 	}
 

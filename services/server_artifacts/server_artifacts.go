@@ -12,363 +12,124 @@ package server_artifacts
 
 import (
 	"context"
-	"fmt"
-	"log"
-	"runtime/debug"
 	"sync"
-	"time"
 
-	"github.com/Velocidex/ordereddict"
-	"github.com/pkg/errors"
-	"www.velocidex.com/golang/velociraptor/actions"
-	"www.velocidex.com/golang/velociraptor/artifacts"
+	actions_proto "www.velocidex.com/golang/velociraptor/actions/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	crypto_proto "www.velocidex.com/golang/velociraptor/crypto/proto"
-	"www.velocidex.com/golang/velociraptor/file_store"
 	flows_proto "www.velocidex.com/golang/velociraptor/flows/proto"
 	"www.velocidex.com/golang/velociraptor/logging"
-	"www.velocidex.com/golang/velociraptor/paths"
-	artifact_paths "www.velocidex.com/golang/velociraptor/paths/artifacts"
-	"www.velocidex.com/golang/velociraptor/result_sets"
-	"www.velocidex.com/golang/velociraptor/vql/acl_managers"
-
 	"www.velocidex.com/golang/velociraptor/services"
-	"www.velocidex.com/golang/velociraptor/utils"
-	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
-	"www.velocidex.com/golang/vfilter"
 )
 
-type ServerArtifactsRunner struct {
-	config_obj       *config_proto.Config
-	timeout          time.Duration
-	mu               sync.Mutex
-	wg               *sync.WaitGroup
-	cancellationPool map[string]func()
+// The Server Artifact Service is responsible for running server side
+// VQL artifacts.
+
+// Currently there is only a single server artifact runner (for each
+// org), running on the master node.
+
+type ServerArtifactRunner struct {
+	mu sync.Mutex
+
+	ctx context.Context
+	wg  *sync.WaitGroup
+
+	// Keep track of currently in flight queries so we can cancel
+	// them.
+	in_flight_collections map[string]CollectionContextManager
 }
 
-func NewServerArtifactRunner(config_obj *config_proto.Config) *ServerArtifactsRunner {
-	return &ServerArtifactsRunner{
-		config_obj:       config_obj,
-		cancellationPool: make(map[string]func()),
-		timeout:          time.Second * time.Duration(600),
-		wg:               &sync.WaitGroup{},
-	}
-}
-
-func (self *ServerArtifactsRunner) process(
+// Create a bare ServerArtifactsService without the extra management.
+func NewServerArtifactRunner(
 	ctx context.Context,
+	config_obj *config_proto.Config, wg *sync.WaitGroup) *ServerArtifactRunner {
+	return &ServerArtifactRunner{
+		in_flight_collections: make(map[string]CollectionContextManager),
+		ctx:                   ctx,
+		wg:                    wg,
+	}
+}
+
+// Start a new collection in the current process.
+func (self *ServerArtifactRunner) LaunchServerArtifact(
 	config_obj *config_proto.Config,
-	wg *sync.WaitGroup) error {
+	session_id string,
+	req *crypto_proto.FlowRequest,
+	collection_context *flows_proto.ArtifactCollectorContext) error {
 
-	client_info_manager, err := services.GetClientInfoManager(config_obj)
+	collection_context_manager, err := NewCollectionContextManager(
+		self.ctx, self.wg, config_obj, req, collection_context)
 	if err != nil {
 		return err
 	}
 
-	tasks, err := client_info_manager.GetClientTasks(ctx, "server")
-	if err != nil {
-		return err
-	}
+	sub_ctx, cancel := context.WithCancel(self.ctx)
 
-	wg.Add(1)
-	defer func() {
-		defer wg.Done()
+	collection_context_manager.StartRefresh(self.wg)
 
-		// Group tasks by session id so we only create one context
-		// per session id
-		group := make(map[string][]*crypto_proto.VeloMessage)
-		for _, task := range tasks {
-			existing, _ := group[task.SessionId]
-			existing = append(existing, task)
-			group[task.SessionId] = existing
-		}
+	self.wg.Add(1)
+	go func() {
+		defer self.wg.Done()
+		defer cancel()
+		defer collection_context_manager.Close(self.ctx)
 
-		for session_id, tasks := range group {
-			collection_context, err := NewCollectionContextManager(
-				ctx, self.config_obj, "server", session_id)
-			if err != nil {
-				continue
-			}
-			logger, err := NewServerLogger(
-				collection_context, config_obj, session_id)
-			if err != nil {
-				continue
-			}
-
-			for _, task := range tasks {
-				err = self.ProcessTask(
-					ctx, config_obj, task, collection_context, logger)
-				if err != nil {
-					logger.Write([]byte(
-						fmt.Sprintf("ServerArtifactsRunner: %v", err)))
-				}
-			}
-
-			collection_context.Close()
-			logger.Close()
-		}
+		self.ProcessTask(sub_ctx, config_obj,
+			session_id, collection_context_manager, req)
 	}()
 
 	return nil
 }
 
-func (self *ServerArtifactsRunner) Cancel(flow_id string) {
+func (self *ServerArtifactRunner) Cancel(
+	ctx context.Context, flow_id, principal string) {
 	self.mu.Lock()
 	defer self.mu.Unlock()
 
-	cancel, pres := self.cancellationPool[flow_id]
+	context_manager, pres := self.in_flight_collections[flow_id]
 	if pres {
-		cancel()
-		delete(self.cancellationPool, flow_id)
+		context_manager.Cancel(ctx, principal)
+		delete(self.in_flight_collections, flow_id)
 	}
 }
 
-func (self *ServerArtifactsRunner) ProcessTask(
-	ctx context.Context,
-	config_obj *config_proto.Config,
-	task *crypto_proto.VeloMessage,
+// A single FlowRequest may contain many VQLClientActions, each may
+// represents a single source to be run in parallel. The artifact
+// compiler will decide how to structure the artifact into multiple
+// VQLClientActions (e.g. by considering precondition clauses).
+func (self *ServerArtifactRunner) ProcessTask(
+	ctx context.Context, config_obj *config_proto.Config,
+	session_id string,
 	collection_context CollectionContextManager,
-	logger *serverLogger) error {
+	req *crypto_proto.FlowRequest) error {
 
-	// Cancel the current collection
-	if task.Cancel != nil {
-		journal, err := services.GetJournal(config_obj)
-		if err != nil {
-			return err
-		}
-
-		path_manager := paths.NewFlowPathManager("server", task.SessionId).Log()
-		err = journal.AppendToResultSet(config_obj,
-			path_manager, []*ordereddict.Dict{
-				ordereddict.NewDict().
-					Set("Timestamp", time.Now().UTC().UnixNano()/1000).
-					Set("time", time.Now().UTC().String()).
-					Set("message", "Cancelling Query")})
-
-		// This task is now done.
-		self.Cancel(task.SessionId)
-
-		return err
-	}
-
-	err := self.runQuery(ctx, task, collection_context, logger)
-	if err != nil {
-		return err
-	}
-
-	collection_context.Modify(func(context *flows_proto.ArtifactCollectorContext) {
-		if context.State == flows_proto.ArtifactCollectorContext_RUNNING {
-			context.State = flows_proto.ArtifactCollectorContext_FINISHED
-		}
-		context.ActiveTime = uint64(time.Now().UnixNano() / 1000)
-		context.ExecutionDuration = (time.Now().UnixNano()/1000 -
-			int64(context.StartTime)) * 1000
-
-	})
-
-	_ = collection_context.Save()
-
-	return nil
-}
-
-func (self *ServerArtifactsRunner) runQuery(
-	ctx context.Context,
-	task *crypto_proto.VeloMessage,
-	collection_context CollectionContextManager,
-	logger *serverLogger) (err error) {
-
-	// Set up the logger for writing query logs. Note this must be
-	// destroyed last since we need to be able to receive logs
-	// from scope destructors.
-	arg := task.VQLClientAction
-	if arg == nil {
-		return errors.New("VQLClientAction should be specified.")
-	}
-
-	if arg.Query == nil {
-		return errors.New("Query should be specified")
-	}
-
-	timeout := time.Duration(arg.Timeout) * time.Second
-	if timeout == 0 {
-		timeout = self.timeout
-	}
-
-	// Cancel the query after this deadline
-	deadline := time.After(timeout)
-	collection_context.Modify(
-		func(context *flows_proto.ArtifactCollectorContext) {
-			context.StartTime = uint64(time.Now().UnixNano() / 1000)
-		})
-	started := time.Now()
-	sub_ctx, cancel := context.WithCancel(ctx)
+	defer collection_context.Close(ctx)
 
 	self.mu.Lock()
-	self.cancellationPool[task.SessionId] = cancel
+	self.in_flight_collections[session_id] = collection_context
 	self.mu.Unlock()
 
+	// Wait here for all the queries to exit then remove them from the
+	// in_flight_collections map.
 	defer func() {
-		self.Cancel(task.SessionId)
+		collection_context.Close(ctx)
 
-		// Send a completion event when the query is finished..
-		flow_context := collection_context.GetContext()
-		row := ordereddict.NewDict().
-			Set("Timestamp", time.Now().UTC().Unix()).
-			Set("Flow", flow_context).
-			Set("FlowId", flow_context.SessionId).
-			Set("ClientId", "server")
-
-		journal, err := services.GetJournal(self.config_obj)
-		if err != nil {
-			return
-		}
-		journal.PushRowsToArtifact(self.config_obj,
-			[]*ordereddict.Dict{row},
-			"System.Flow.Completion", "server", flow_context.SessionId,
-		)
+		self.mu.Lock()
+		delete(self.in_flight_collections, session_id)
+		self.mu.Unlock()
 	}()
 
-	// Where to write the logs.
-	path_manager := paths.NewFlowPathManager("server", task.SessionId)
+	wg := &sync.WaitGroup{}
+	for _, task := range req.VQLClientActions {
+		// We expect each source to be run in parallel.
+		wg.Add(1)
+		go func(task *actions_proto.VQLCollectorArgs) {
+			defer wg.Done()
 
-	// Server artifacts run with full access. In order to collect
-	// them in the first place we need COLLECT_SERVER permissions.
-	manager, err := services.GetRepositoryManager(self.config_obj)
-	if err != nil {
-		return err
+			collection_context.RunQuery(task)
+		}(task)
 	}
 
-	principal := arg.Principal
-	if principal == "" && self.config_obj.Client != nil {
-		principal = self.config_obj.Client.PinnedServerName
-	}
-
-	scope := manager.BuildScope(services.ScopeBuilder{
-		Config: self.config_obj,
-
-		// For server artifacts, upload() ends up writing in the file
-		// store. NOTE: This allows arbitrary filestore write. Using
-		// this we can manage the files in the filestore using VQL
-		// artifacts.
-		Uploader: NewServerUploader(self.config_obj,
-			path_manager, collection_context),
-
-		// Run this query on behalf of the caller so they are
-		// subject to ACL checks
-		ACLManager: acl_managers.NewServerACLManager(self.config_obj, principal),
-		Logger:     log.New(logger, "", 0),
-	})
-	defer scope.Close()
-
-	scope.Log("Running query on behalf of user %v", principal)
-
-	env := ordereddict.NewDict()
-	for _, env_spec := range arg.Env {
-		env.Set(env_spec.Key, env_spec.Value)
-	}
-	scope.AppendVars(env)
-
-	// If we panic below we need to recover and report this to the
-	// server.
-	defer func() {
-		r := recover()
-		if r != nil {
-			scope.Log(string(debug.Stack()))
-		}
-	}()
-
-	scope.Log("<green>Starting</> query execution.")
-
-	// All the queries will use the same scope. This allows one
-	// query to define functions for the next query in order.
-	for _, query := range arg.Query {
-		query_log := actions.QueryLog.AddQuery(query.VQL)
-
-		vql, err := vfilter.Parse(query.VQL)
-		if err != nil {
-			return err
-		}
-
-		read_chan := vql.Eval(sub_ctx, scope)
-		var rs_writer result_sets.ResultSetWriter
-		if query.Name != "" {
-			name := artifacts.DeobfuscateString(
-				self.config_obj, query.Name)
-
-			opts := vql_subsystem.EncOptsFromScope(scope)
-			path_manager, err := artifact_paths.NewArtifactPathManager(
-				self.config_obj, "server", task.SessionId, name)
-			if err != nil {
-				return err
-			}
-
-			file_store_factory := file_store.GetFileStore(self.config_obj)
-			rs_writer, err = result_sets.NewResultSetWriter(
-				file_store_factory, path_manager.Path(),
-				opts, utils.BackgroundWriter, result_sets.AppendMode)
-			if err != nil {
-				return err
-			}
-
-			defer rs_writer.Close()
-
-			// Flush the result set periodically to ensure
-			// rows hit the disk sooner.
-			flusher_done := ResultSetFlusher(ctx, rs_writer)
-			defer flusher_done()
-
-			// Update the artifacts with results in the
-			// context.
-			collection_context.Modify(
-				func(context *flows_proto.ArtifactCollectorContext) {
-					if !utils.InString(
-						context.ArtifactsWithResults, name) {
-						context.ArtifactsWithResults = append(
-							context.ArtifactsWithResults, name)
-					}
-				})
-		}
-
-		row_idx := 0
-
-	process_query:
-		for {
-			select {
-			case <-deadline:
-				msg := fmt.Sprintf("Query timed out after %v seconds",
-					time.Now().Unix()-started.Unix())
-				scope.Log(msg)
-
-				// Cancel the sub ctx but do not exit
-				// - we need to wait for the sub query
-				// to finish after cancelling so we
-				// can at least return any data it
-				// has.
-				cancel()
-
-				// Try again after a while to prevent spinning here.
-				deadline = time.After(self.timeout)
-
-			case row, ok := <-read_chan:
-				if !ok {
-					query_log.Close()
-					break process_query
-				}
-				if rs_writer != nil {
-					row_idx += 1
-					rs_writer.Write(vfilter.RowToDict(sub_ctx, scope, row))
-					collection_context.Modify(
-						func(context *flows_proto.ArtifactCollectorContext) {
-							context.TotalCollectedRows++
-						})
-				}
-			}
-		}
-
-		if query.Name != "" {
-			scope.Log("Query %v: Emitted %v rows", query.Name, row_idx)
-		}
-	}
+	wg.Wait()
 
 	return nil
 }
@@ -376,71 +137,14 @@ func (self *ServerArtifactsRunner) runQuery(
 func NewServerArtifactService(
 	ctx context.Context,
 	wg *sync.WaitGroup,
-	config_obj *config_proto.Config) error {
+	config_obj *config_proto.Config) (services.ServerArtifactRunner, error) {
 
-	self := &ServerArtifactsRunner{
-		config_obj:       config_obj,
-		timeout:          time.Second * time.Duration(600),
-		wg:               wg,
-		cancellationPool: make(map[string]func()),
-	}
+	self := NewServerArtifactRunner(ctx, config_obj, wg)
 
 	logger := logging.GetLogger(
 		config_obj, &logging.FrontendComponent)
-	logger.Info("<green>Starting</> Server Artifact Runner Service")
+	logger.Info("<green>Starting</> Server Artifact Runner Service for %v",
+		services.GetOrgName(config_obj))
 
-	notifier, err := services.GetNotifier(config_obj)
-	if err != nil {
-		return err
-	}
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		logger := logging.GetLogger(config_obj, &logging.FrontendComponent)
-
-		// Listen for notifications from the server.
-		notification, cancel := notifier.ListenForNotification("server")
-		defer cancel()
-
-		err := self.process(ctx, config_obj, wg)
-		if err != nil {
-			logger.Error("ServerArtifactsRunner: %v", err)
-			return
-		}
-
-		for {
-			select {
-			// Check the queues anyway every minute in case we miss the
-			// notification.
-			case <-time.After(time.Duration(60) * time.Second):
-				err = self.process(ctx, config_obj, wg)
-				if err != nil {
-					logger.Error("ServerArtifactsRunner: %v", err)
-					continue
-				}
-
-			case <-ctx.Done():
-				return
-
-			case quit := <-notification:
-				if quit {
-					logger.Info("ServerArtifactsRunner: quit.")
-					return
-				}
-				err := self.process(ctx, config_obj, wg)
-				if err != nil {
-					logger.Error("ServerArtifactsRunner: %v", err)
-					continue
-				}
-
-				// Listen again.
-				cancel()
-				notification, cancel = notifier.ListenForNotification("server")
-			}
-		}
-	}()
-
-	return nil
+	return self, nil
 }

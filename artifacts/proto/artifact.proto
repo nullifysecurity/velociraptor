@@ -89,6 +89,7 @@ message ArtifactSource {
 }
 
 
+// Deprecated - Reports have been replaced by notebooks.
 message Report {
     option (semantic) = {
         description: "A report is generated from the output of the artifact collected. "
@@ -123,6 +124,9 @@ message Artifact {
             "Linux.Browsers.ChromeHistory";
         }];
 
+    // Aliases are other names by which the same artifact is known
+    repeated string aliases = 21;
+
     string description = 2 [(sem_type) = {
             description: "What the artifact is trying to collect."
         }];
@@ -132,6 +136,10 @@ message Artifact {
         }];
 
     repeated string reference = 5 [(sem_type) = {
+            description: "A reference for this artifact."
+        }];
+
+    repeated string references = 23 [(sem_type) = {
             description: "A reference for this artifact."
         }];
 
@@ -197,6 +205,7 @@ message Artifact {
 
     // The artifact is built into the Velociraptor binary.
     bool built_in = 20;
+    bool is_alias = 22;
 }
 
 message ArtifactDescriptors {
@@ -262,6 +271,13 @@ message Tool {
 
     // If set on a request we refresh the hash.
     bool materialize = 11;
+
+    // The artifact this definition came from.
+    string artifact = 13;
+
+    // Additional versions of this tool.
+    repeated Tool versions = 14;
+
 }
 
 // Keep track of all the third party tools we know about.

@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	oidc "github.com/coreos/go-oidc"
+	oidc "github.com/coreos/go-oidc/v3/oidc"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/oauth2"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
@@ -20,6 +20,10 @@ type OidcAuthenticator struct {
 
 func (self *OidcAuthenticator) IsPasswordLess() bool {
 	return true
+}
+
+func (self *OidcAuthenticator) AuthRedirectTemplate() string {
+	return self.authenticator.AuthRedirectTemplate
 }
 
 func (self *OidcAuthenticator) Name() string {

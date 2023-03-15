@@ -4,7 +4,8 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 
-	"github.com/pkg/errors"
+	"github.com/Velocidex/ttlcache/v2"
+	"github.com/go-errors/errors"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	crypto_utils "www.velocidex.com/golang/velociraptor/crypto/utils"
 	"www.velocidex.com/golang/velociraptor/logging"
@@ -46,7 +47,7 @@ func (self *ClientCryptoManager) AddCertificate(
 
 	// Remove the cached key for this server. This is essential to
 	// ensure servers can rotate their keys.
-	self.cipher_lru.Delete(server_name)
+	self.cipher_lru.DeleteCipher(server_name)
 
 	return server_name, nil
 }
@@ -75,11 +76,12 @@ func NewClientCryptoManager(config_obj *config_proto.Config, client_private_key_
 	}
 
 	return &ClientCryptoManager{CryptoManager{
-		client_id:   client_id,
-		private_key: private_key,
-		Resolver:    NewInMemoryPublicKeyResolver(),
-		cipher_lru:  NewCipherLRU(lru_size),
-		caPool:      roots,
-		logger:      logger,
+		client_id:           client_id,
+		private_key:         private_key,
+		Resolver:            NewInMemoryPublicKeyResolver(),
+		cipher_lru:          NewCipherLRU(lru_size),
+		unauthenticated_lru: ttlcache.NewCache(),
+		caPool:              roots,
+		logger:              logger,
 	}}, nil
 }

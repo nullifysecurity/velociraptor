@@ -4,20 +4,20 @@ import (
 	"context"
 	"encoding/binary"
 	"io"
-	"io/ioutil"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 
-	errors "github.com/pkg/errors"
+	"github.com/go-errors/errors"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/constants"
 	crypto_proto "www.velocidex.com/golang/velociraptor/crypto/proto"
-	"www.velocidex.com/golang/velociraptor/executor"
 	"www.velocidex.com/golang/velociraptor/json"
 	"www.velocidex.com/golang/velociraptor/logging"
+	"www.velocidex.com/golang/velociraptor/responder"
 	"www.velocidex.com/golang/velociraptor/utils"
 )
 
@@ -111,6 +111,8 @@ type FileBasedRingBuffer struct {
 	leased_pointer int64
 
 	log_ctx *logging.LogContext
+
+	flow_manager *responder.FlowManager
 }
 
 func (self *FileBasedRingBuffer) Enqueue(item []byte) {
@@ -210,30 +212,6 @@ func LeaseAndCompress(self IRingBuffer, size uint64,
 	return result
 }
 
-// Determine if the item is blacklisted. Items are blacklisted when
-// their corresponding flow is cancelled.
-func (self *FileBasedRingBuffer) IsItemBlackListed(item []byte) bool {
-	message_list := crypto_proto.MessageList{}
-	err := proto.Unmarshal(item, &message_list)
-	if err != nil || len(message_list.Job) == 0 {
-		return false
-	}
-
-	message := message_list.Job[0]
-
-	// Always allow log messages through - even after a flow has
-	// been cancelled. This allows us to register the cancellation
-	// message in the flow logs.
-	if message.LogMessage != nil {
-		return false
-	}
-
-	if executor.Canceller != nil {
-		return executor.Canceller.IsCancelled(message.SessionId)
-	}
-	return false
-}
-
 func (self *FileBasedRingBuffer) Lease(size uint64) []byte {
 	self.mu.Lock()
 	defer self.mu.Unlock()
@@ -260,10 +238,14 @@ func (self *FileBasedRingBuffer) Lease(size uint64) []byte {
 				self._Truncate()
 				return nil
 			}
-			if !self.IsItemBlackListed(item) {
-				result = append(result, item...)
-			}
 
+			// Filter the item from any blacklisted flow ids
+			filtered_item := FilterBlackListedItems(
+				context.Background(), self.flow_manager, self.config_obj, item)
+			result = append(result, filtered_item...)
+
+			// Skip the full length of the unfiltered item to maintain
+			// alignment.
 			self.leased_pointer += 8 + int64(n)
 			self.header.LeasedBytes += int64(n)
 			self.header.AvailableBytes -= int64(n)
@@ -346,6 +328,7 @@ func (self *FileBasedRingBuffer) Commit() {
 func OpenFileBasedRingBuffer(
 	ctx context.Context,
 	config_obj *config_proto.Config,
+	flow_manager *responder.FlowManager,
 	log_ctx *logging.LogContext) (*FileBasedRingBuffer, error) {
 
 	filename := getLocalBufferName(config_obj)
@@ -358,12 +341,13 @@ func OpenFileBasedRingBuffer(
 		return nil, err
 	}
 
-	return newFileBasedRingBuffer(fd, config_obj, log_ctx)
+	return newFileBasedRingBuffer(fd, config_obj, flow_manager, log_ctx)
 }
 
 func NewFileBasedRingBuffer(
 	ctx context.Context,
 	config_obj *config_proto.Config,
+	flow_manager *responder.FlowManager,
 	log_ctx *logging.LogContext) (*FileBasedRingBuffer, error) {
 
 	if config_obj.Client == nil || config_obj.Client.LocalBuffer == nil {
@@ -386,7 +370,7 @@ func NewFileBasedRingBuffer(
 	// (`C:\Program Files\Velociraptor\Tools`) so symlink attacks are
 	// mitigated but in case Velociraptor is misconfigured we are
 	// extra careful.
-	fd, err := ioutil.TempFile(".", "")
+	fd, err := os.CreateTemp(filepath.Dir(filename), "")
 	if err != nil {
 		return nil, err
 	}
@@ -404,12 +388,13 @@ func NewFileBasedRingBuffer(
 		}
 	}
 
-	return newFileBasedRingBuffer(fd, config_obj, log_ctx)
+	return newFileBasedRingBuffer(fd, config_obj, flow_manager, log_ctx)
 }
 
 func newFileBasedRingBuffer(
 	fd *os.File,
 	config_obj *config_proto.Config,
+	flow_manager *responder.FlowManager,
 	log_ctx *logging.LogContext) (*FileBasedRingBuffer, error) {
 
 	header := &Header{
@@ -460,6 +445,7 @@ func newFileBasedRingBuffer(
 		write_buf:      make([]byte, 8),
 		leased_pointer: header.ReadPointer,
 		log_ctx:        log_ctx,
+		flow_manager:   flow_manager,
 	}
 
 	result.c = sync.NewCond(&result.mu)
@@ -496,6 +482,8 @@ type RingBuffer struct {
 
 	// The maximum size of the ring buffer
 	Size uint64
+
+	flow_manager *responder.FlowManager
 }
 
 func (self *RingBuffer) Reset() {
@@ -554,26 +542,47 @@ func (self *RingBuffer) AvailableBytes() uint64 {
 
 // Determine if the item is blacklisted. Items are blacklisted when
 // their corresponding flow is cancelled.
-func (self *RingBuffer) IsItemBlackListed(item []byte) bool {
-	message_list := crypto_proto.MessageList{}
-	err := proto.Unmarshal(item, &message_list)
+func FilterBlackListedItems(
+	ctx context.Context,
+	flow_manager *responder.FlowManager,
+	config_obj *config_proto.Config, item []byte) []byte {
+
+	message_list := &crypto_proto.MessageList{}
+	err := proto.Unmarshal(item, message_list)
 	if err != nil || len(message_list.Job) == 0 {
-		return false
+		return item
 	}
 
-	message := message_list.Job[0]
+	modified := false
+	result := &crypto_proto.MessageList{}
+	for _, message := range message_list.Job {
+		// Always allow log messages through - even after a flow has
+		// been cancelled. This allows us to register the cancellation
+		// message in the flow logs.
+		if message.LogMessage != nil ||
 
-	// Always allow log messages through - even after a flow has
-	// been cancelled. This allows us to register the cancellation
-	// message in the flow logs.
-	if message.LogMessage != nil {
-		return false
+			// Always allow FlowStat to be sent
+			message.FlowStats != nil ||
+
+			// Remove blacklisted collections (because they were
+			// cancelled).
+			!flow_manager.IsCancelled(message.SessionId) {
+
+			result.Job = append(result.Job, message)
+		} else {
+			modified = true
+		}
 	}
 
-	if executor.Canceller != nil {
-		return executor.Canceller.IsCancelled(message.SessionId)
+	if !modified {
+		return item
 	}
-	return false
+
+	serialized, err := proto.Marshal(result)
+	if err != nil {
+		return item
+	}
+	return serialized
 }
 
 // Leases a group of messages for transmission. Will not advance the
@@ -593,9 +602,13 @@ func (self *RingBuffer) Lease(size uint64) []byte {
 	leased := make([]byte, 0)
 
 	for _, item := range self.messages[self.leased_idx:] {
-		if !self.IsItemBlackListed(item) {
-			leased = append(leased, item...)
-		}
+		filtered := FilterBlackListedItems(
+			context.Background(), self.flow_manager, self.config_obj, item)
+
+		leased = append(leased, filtered...)
+
+		// Skip the full length of the unfiltered message - the
+		// filtered message may be shorter.
 		self.leased_length += uint64(len(item))
 		self.leased_idx += 1
 		if uint64(len(leased)) > size {
@@ -663,11 +676,13 @@ func (self *RingBuffer) Commit() {
 	self.c.Broadcast()
 }
 
-func NewRingBuffer(config_obj *config_proto.Config, size uint64) *RingBuffer {
+func NewRingBuffer(config_obj *config_proto.Config,
+	flow_manager *responder.FlowManager, size uint64) *RingBuffer {
 	result := &RingBuffer{
-		messages:   make([][]byte, 0),
-		Size:       size,
-		config_obj: config_obj,
+		messages:     make([][]byte, 0),
+		Size:         size,
+		config_obj:   config_obj,
+		flow_manager: flow_manager,
 	}
 	result.c = sync.NewCond(&result.mu)
 
@@ -689,16 +704,18 @@ func getLocalBufferName(config_obj *config_proto.Config) string {
 
 func NewLocalBuffer(
 	ctx context.Context,
+	flow_manager *responder.FlowManager,
 	config_obj *config_proto.Config) IRingBuffer {
 	if config_obj.Client.LocalBuffer.DiskSize > 0 &&
 		getLocalBufferName(config_obj) != "" {
 
 		logger := logging.GetLogger(config_obj, &logging.ClientComponent)
-		rb, err := NewFileBasedRingBuffer(ctx, config_obj, logger)
+		rb, err := NewFileBasedRingBuffer(ctx, config_obj, flow_manager, logger)
 		if err == nil {
 			return rb
 		}
 		logger.Error("Unable to create a file based ring buffer - using in memory only.")
 	}
-	return NewRingBuffer(config_obj, config_obj.Client.LocalBuffer.MemorySize)
+	return NewRingBuffer(config_obj, flow_manager,
+		config_obj.Client.LocalBuffer.MemorySize)
 }

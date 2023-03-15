@@ -63,6 +63,11 @@ var (
 	})
 )
 
+type jsonBatch struct {
+	bytes.Buffer
+	row_count int
+}
+
 type ReplicationService struct {
 	config_obj *config_proto.Config
 	Buffer     *BufferFile
@@ -85,7 +90,7 @@ type ReplicationService struct {
 	masterRegistrations map[string]bool
 
 	// Store rows for async push
-	batch map[string]*bytes.Buffer
+	batch map[string]*jsonBatch
 }
 
 func (self *ReplicationService) RetryDuration() time.Duration {
@@ -108,6 +113,10 @@ func (self *ReplicationService) isEventRegistered(artifact string) bool {
 
 	ok, pres := self.masterRegistrations[artifact]
 	return pres && ok
+}
+
+func (self *ReplicationService) SetClock(clock utils.Clock) {
+	self.qm.SetClock(clock)
 }
 
 func (self *ReplicationService) pumpEventFromBufferFile() error {
@@ -184,14 +193,15 @@ func (self *ReplicationService) startAsyncLoop(
 				// Work on the batch without a lock
 				self.mu.Lock()
 				todo := self.batch
-				self.batch = make(map[string]*bytes.Buffer)
+				self.batch = make(map[string]*jsonBatch)
 				self.mu.Unlock()
 
 				for k, v := range todo {
 					// Ignore errors since there is no way to report
 					// to the caller.
-					self.PushJsonlToArtifact(
-						config_obj, v.Bytes(), k, "server", "")
+					self.PushJsonlToArtifact(ctx,
+						config_obj, v.Bytes(), v.row_count, k,
+						"server", "")
 				}
 			}
 		}
@@ -304,6 +314,7 @@ func (self *ReplicationService) ProcessMasterRegistrations(event *ordereddict.Di
 
 	names, ok := names_any.([]interface{})
 	if ok {
+		// -----
 		self.mu.Lock()
 		self.masterRegistrations = make(map[string]bool)
 
@@ -318,6 +329,7 @@ func (self *ReplicationService) ProcessMasterRegistrations(event *ordereddict.Di
 			"events": names,
 		}).Info("Master event registrations")
 		self.mu.Unlock()
+		// -----
 	}
 }
 
@@ -351,7 +363,7 @@ func (self *ReplicationService) startMasterRegistrationLoop(
 func (self *ReplicationService) AppendJsonlToResultSet(
 	config_obj *config_proto.Config,
 	path api.FSPathSpec,
-	jsonl []byte) error {
+	jsonl []byte, row_count int) error {
 
 	// Key a lock to manage access to this file.
 	self.mu.Lock()
@@ -370,12 +382,12 @@ func (self *ReplicationService) AppendJsonlToResultSet(
 	file_store_factory := file_store.GetFileStore(config_obj)
 
 	rs_writer, err := result_sets.NewResultSetWriter(file_store_factory,
-		path, json.NoEncOpts, utils.BackgroundWriter, result_sets.AppendMode)
+		path, json.DefaultEncOpts(), utils.BackgroundWriter, result_sets.AppendMode)
 	if err != nil {
 		return err
 	}
 
-	rs_writer.WriteJSONL(jsonl, 0)
+	rs_writer.WriteJSONL(jsonl, uint64(row_count))
 	rs_writer.Close()
 
 	return nil
@@ -403,7 +415,8 @@ func (self *ReplicationService) AppendToResultSet(
 	file_store_factory := file_store.GetFileStore(config_obj)
 
 	rs_writer, err := result_sets.NewResultSetWriter(file_store_factory,
-		path, json.NoEncOpts, utils.BackgroundWriter, result_sets.AppendMode)
+		path, json.DefaultEncOpts(),
+		utils.BackgroundWriter, result_sets.AppendMode)
 	if err != nil {
 		return err
 	}
@@ -418,21 +431,21 @@ func (self *ReplicationService) AppendToResultSet(
 }
 
 func (self *ReplicationService) Broadcast(
-	config_obj *config_proto.Config, rows []*ordereddict.Dict,
-	artifact, client_id, flows_id string) error {
+	ctx context.Context, config_obj *config_proto.Config,
+	rows []*ordereddict.Dict, artifact, client_id, flows_id string) error {
 
 	return notInitializedError
 }
 
 func (self *ReplicationService) PushRowsToArtifactAsync(
-	config_obj *config_proto.Config, row *ordereddict.Dict,
-	artifact string) {
+	ctx context.Context, config_obj *config_proto.Config,
+	row *ordereddict.Dict, artifact string) {
 	self.mu.Lock()
 	defer self.mu.Unlock()
 
 	queue, pres := self.batch[artifact]
 	if !pres {
-		queue = &bytes.Buffer{}
+		queue = &jsonBatch{}
 	}
 
 	serialized, err := row.MarshalJSON()
@@ -444,10 +457,10 @@ func (self *ReplicationService) PushRowsToArtifactAsync(
 }
 
 func (self *ReplicationService) pushRowsToLocalQueueManager(
-	config_obj *config_proto.Config, rows []*ordereddict.Dict,
-	artifact, client_id, flows_id string) error {
+	ctx context.Context, config_obj *config_proto.Config,
+	rows []*ordereddict.Dict, artifact, client_id, flows_id string) error {
 
-	path_manager, err := artifacts.NewArtifactPathManager(
+	path_manager, err := artifacts.NewArtifactPathManager(ctx,
 		config_obj, client_id, flows_id, artifact)
 	if err != nil {
 		return err
@@ -472,10 +485,10 @@ func (self *ReplicationService) pushRowsToLocalQueueManager(
 }
 
 func (self *ReplicationService) pushJsonlToLocalQueueManager(
-	config_obj *config_proto.Config, jsonl []byte,
-	artifact, client_id, flows_id string) error {
+	ctx context.Context, config_obj *config_proto.Config,
+	jsonl []byte, row_count int, artifact, client_id, flows_id string) error {
 
-	path_manager, err := artifacts.NewArtifactPathManager(
+	path_manager, err := artifacts.NewArtifactPathManager(ctx,
 		config_obj, client_id, flows_id, artifact)
 	if err != nil {
 		return err
@@ -488,23 +501,25 @@ func (self *ReplicationService) pushJsonlToLocalQueueManager(
 		if err != nil {
 			return err
 		}
-		return self.AppendJsonlToResultSet(config_obj, path, jsonl)
+		return self.AppendJsonlToResultSet(config_obj, path, jsonl, row_count)
 	}
 
 	// The Queue manager will manage writing event artifacts to a
 	// timed result set, including multi frontend synchronisation.
 	if self != nil && self.qm != nil {
-		return self.qm.PushEventJsonl(path_manager, jsonl)
+		return self.qm.PushEventJsonl(path_manager, jsonl, row_count)
 	}
 	return errors.New("Filestore not initialized")
 }
 
 func (self *ReplicationService) PushJsonlToArtifact(
-	config_obj *config_proto.Config, jsonl []byte,
+	ctx context.Context, config_obj *config_proto.Config,
+	jsonl []byte, row_count int,
 	artifact, client_id, flow_id string) error {
 
-	err := self.pushJsonlToLocalQueueManager(
-		config_obj, jsonl, artifact, client_id, flow_id)
+	err := self.pushJsonlToLocalQueueManager(ctx,
+		config_obj, jsonl, row_count, artifact,
+		client_id, flow_id)
 	if err != nil {
 		return err
 	}
@@ -541,10 +556,16 @@ func (self *ReplicationService) PushJsonlToArtifact(
 }
 
 func (self *ReplicationService) PushRowsToArtifact(
-	config_obj *config_proto.Config,
+	ctx context.Context, config_obj *config_proto.Config,
 	rows []*ordereddict.Dict, artifact, client_id, flow_id string) error {
 
-	err := self.pushRowsToLocalQueueManager(
+	serialized, err := json.MarshalJsonl(rows)
+	if err != nil {
+		return err
+	}
+	replicationItemSize.Observe(float64(len(serialized)))
+
+	err = self.pushRowsToLocalQueueManager(ctx,
 		config_obj, rows, artifact, client_id, flow_id)
 	if err != nil {
 		return err
@@ -556,12 +577,6 @@ func (self *ReplicationService) PushRowsToArtifact(
 	}
 
 	replicationTotalSent.Inc()
-
-	serialized, err := json.MarshalJsonl(rows)
-	if err != nil {
-		return err
-	}
-	replicationItemSize.Observe(float64(len(serialized)))
 
 	request := &api_proto.PushEventRequest{
 		Artifact: artifact,
@@ -710,7 +725,7 @@ func NewReplicationService(
 		config_obj:          config_obj,
 		locks:               make(map[string]*sync.Mutex),
 		masterRegistrations: make(map[string]bool),
-		batch:               make(map[string]*bytes.Buffer),
+		batch:               make(map[string]*jsonBatch),
 		Clock:               utils.RealClock{},
 	}
 

@@ -24,7 +24,8 @@ import (
 	"strings"
 
 	"github.com/Velocidex/ordereddict"
-	"github.com/pkg/errors"
+	"github.com/go-errors/errors"
+
 	"github.com/shirou/gopsutil/v3/disk"
 	"www.velocidex.com/golang/velociraptor/accessors"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
@@ -193,10 +194,10 @@ func (self GlobPlugin) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) *vfi
 }
 
 type ReadFileArgs struct {
-	Chunk     int      `vfilter:"optional,field=chunk,doc=length of each chunk to read from the file."`
-	MaxLength int      `vfilter:"optional,field=max_length,doc=Max length of the file to read."`
-	Filenames []string `vfilter:"required,field=filenames,doc=One or more files to open."`
-	Accessor  string   `vfilter:"optional,field=accessor,doc=An accessor to use."`
+	Chunk     int                 `vfilter:"optional,field=chunk,doc=length of each chunk to read from the file."`
+	MaxLength int                 `vfilter:"optional,field=max_length,doc=Max length of the file to read."`
+	Filenames []*accessors.OSPath `vfilter:"required,field=filenames,doc=One or more files to open."`
+	Accessor  string              `vfilter:"optional,field=accessor,doc=An accessor to use."`
 }
 
 type ReadFileResponse struct {
@@ -212,11 +213,11 @@ func (self ReadFilePlugin) processFile(
 	scope vfilter.Scope,
 	arg *ReadFileArgs,
 	accessor accessors.FileSystemAccessor,
-	file string,
+	file *accessors.OSPath,
 	output_chan chan vfilter.Row) {
 	total_len := int64(0)
 
-	fd, err := accessor.Open(file)
+	fd, err := accessor.OpenWithOSPath(file)
 	if err != nil {
 		return
 	}
@@ -226,8 +227,8 @@ func (self ReadFilePlugin) processFile(
 	for {
 		n, err := io.ReadAtLeast(fd, buf, arg.Chunk)
 		if err != nil &&
-			errors.Cause(err) != io.ErrUnexpectedEOF &&
-			errors.Cause(err) != io.EOF {
+			!errors.Is(err, io.ErrUnexpectedEOF) &&
+			!errors.Is(err, io.EOF) {
 			scope.Log("read_file: %v", err)
 			return
 		}
@@ -238,7 +239,7 @@ func (self ReadFilePlugin) processFile(
 		response := &ReadFileResponse{
 			Data:     string(buf[:n]),
 			Offset:   total_len,
-			Filename: file,
+			Filename: file.String(),
 		}
 
 		select {
@@ -313,10 +314,10 @@ func (self ReadFilePlugin) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) 
 }
 
 type ReadFileFunctionArgs struct {
-	Length   int    `vfilter:"optional,field=length,doc=Max length of the file to read."`
-	Offset   int64  `vfilter:"optional,field=offset,doc=Where to read from the file."`
-	Filename string `vfilter:"required,field=filename,doc=One or more files to open."`
-	Accessor string `vfilter:"optional,field=accessor,doc=An accessor to use."`
+	Length   int               `vfilter:"optional,field=length,doc=Max length of the file to read."`
+	Offset   int64             `vfilter:"optional,field=offset,doc=Where to read from the file."`
+	Filename *accessors.OSPath `vfilter:"required,field=filename,doc=One or more files to open."`
+	Accessor string            `vfilter:"optional,field=accessor,doc=An accessor to use."`
 }
 
 type ReadFileFunction struct{}
@@ -349,9 +350,9 @@ func (self *ReadFileFunction) Call(ctx context.Context,
 
 	buf := make([]byte, arg.Length)
 
-	fd, err := accessor.Open(arg.Filename)
+	fd, err := accessor.OpenWithOSPath(arg.Filename)
 	if err != nil {
-		scope.Log("read_file: %v", err)
+		scope.Log("read_file: %v: %v", arg.Filename.String(), err)
 		return ""
 	}
 	defer fd.Close()
@@ -362,8 +363,8 @@ func (self *ReadFileFunction) Call(ctx context.Context,
 
 	n, err := io.ReadAtLeast(fd, buf, len(buf))
 	if err != nil &&
-		errors.Cause(err) != io.ErrUnexpectedEOF &&
-		errors.Cause(err) != io.EOF {
+		!errors.Is(err, io.ErrUnexpectedEOF) &&
+		!errors.Is(err, io.EOF) {
 		scope.Log("read_file: %v", err)
 		return ""
 	}

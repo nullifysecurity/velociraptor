@@ -127,7 +127,7 @@ func outputCSV(ctx context.Context,
 		10, *max_wait)
 
 	csv_writer := csv.GetCSVAppender(config_obj,
-		scope, &StdoutWrapper{out}, true /* write_headers */)
+		scope, &StdoutWrapper{out}, csv.WriteHeaders, json.DefaultEncOpts())
 	defer csv_writer.Close()
 
 	for result := range result_chan {
@@ -241,7 +241,8 @@ func doRemoteQuery(
 			scope := vql_subsystem.MakeScope()
 
 			csv_writer := csv.GetCSVAppender(config_obj,
-				scope, &StdoutWrapper{os.Stdout}, true /* write_headers */)
+				scope, &StdoutWrapper{os.Stdout},
+				csv.WriteHeaders, json.DefaultEncOpts())
 			defer csv_writer.Close()
 
 			for _, row := range rows {
@@ -258,10 +259,12 @@ func doQuery() error {
 		return err
 	}
 
-	if config_obj.Frontend == nil {
-		config_obj.Frontend = &config_proto.FrontendConfig{}
+	config_obj.Services = services.GenericToolServices()
+	if config_obj.Datastore != nil && config_obj.Datastore.Location != "" {
+		config_obj.Services.IndexServer = true
+		config_obj.Services.ClientInfo = true
+		config_obj.Services.Label = true
 	}
-	config_obj.Frontend.ServerServices = services.GenericToolServices()
 
 	ctx, cancel := install_sig_handler()
 	defer cancel()

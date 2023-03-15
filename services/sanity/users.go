@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"strings"
 
-	"www.velocidex.com/golang/velociraptor/acls"
+	"github.com/sirupsen/logrus"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/logging"
@@ -40,7 +40,7 @@ func createInitialUsers(
 		user_record, err := users_manager.GetUser(ctx, user.Name)
 		if err != nil || user_record.Name != user.Name {
 			logger.Info("Initial user %v not present, creating", user.Name)
-			new_user, err := users.NewUserRecord(user.Name)
+			new_user, err := users.NewUserRecord(config_obj, user.Name)
 			if err != nil {
 				return err
 			}
@@ -77,7 +77,7 @@ func createInitialUsers(
 					return err
 				}
 
-				org_record := &api_proto.Org{
+				org_record := &api_proto.OrgRecord{
 					Name: org_config_obj.OrgName,
 					Id:   org_config_obj.OrgId,
 				}
@@ -89,7 +89,7 @@ func createInitialUsers(
 				new_user.Orgs = append(new_user.Orgs, org_record)
 
 				// Give them the administrator role in the respective org
-				err = acls.GrantRoles(
+				err = services.GrantRoles(
 					org_config_obj, user.Name, []string{"administrator"})
 				if err != nil {
 					return err
@@ -102,9 +102,9 @@ func createInitialUsers(
 				return err
 			}
 
-			logger := logging.GetLogger(config_obj, &logging.Audit)
-			logger.Info("Granting administrator role to %v because they are specified in the config's initial users",
-				user.Name)
+			logging.LogAudit(config_obj, "SanityService",
+				"Granting administrator role, because user is specified in the config's initial users",
+				logrus.Fields{"user": user.Name})
 		}
 	}
 	return nil

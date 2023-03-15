@@ -92,7 +92,7 @@ func (self *ArtifactRepositoryPlugin) Call(
 
 			artifact_name_with_source := artifact_name + "/" + source
 
-			artifact, pres = self.repository.Get(
+			artifact, pres = self.repository.Get(ctx,
 				self.config_obj, artifact_name_with_source)
 			if !pres {
 				scope.Log("Source %v not found in artifact %v",
@@ -104,7 +104,8 @@ func (self *ArtifactRepositoryPlugin) Call(
 
 		} else {
 
-			artifact, pres = self.repository.Get(self.config_obj, artifact_name)
+			artifact, pres = self.repository.Get(
+				ctx, self.config_obj, artifact_name)
 			if !pres {
 				scope.Log("Artifact %v not found", artifact_name)
 				return
@@ -149,8 +150,8 @@ func (self *ArtifactRepositoryPlugin) Call(
 
 		for _, request := range requests {
 			eval_request := func(
-				request *actions_proto.VQLCollectorArgs, scope types.Scope) {
-				defer wg.Done()
+				request *actions_proto.VQLCollectorArgs,
+				scope types.Scope) {
 
 				// We create a child scope for evaluating the artifact.
 				child_scope, err := self.copyScope(scope, artifact_name)
@@ -174,7 +175,7 @@ func (self *ArtifactRepositoryPlugin) Call(
 
 					_, pres := env.Get(k)
 					if !pres {
-						scope.Log(fmt.Sprintf(
+						child_scope.Log(fmt.Sprintf(
 							"Unknown parameter %s provided to artifact %v",
 							k, strings.Join(self.prefix, ".")))
 						return
@@ -192,14 +193,14 @@ func (self *ArtifactRepositoryPlugin) Call(
 				// Add the scope args
 				child_scope.AppendVars(env)
 
-				ok, err := actions.CheckPreconditions(ctx, scope, request)
+				ok, err := actions.CheckPreconditions(ctx, child_scope, request)
 				if err != nil {
-					scope.Log("While evaluating preconditions: %v", err)
+					child_scope.Log("While evaluating preconditions: %v", err)
 					return
 				}
 
 				if !ok {
-					scope.Log("Skipping query due to preconditions")
+					child_scope.Log("Skipping query due to preconditions")
 					return
 				}
 
@@ -207,7 +208,7 @@ func (self *ArtifactRepositoryPlugin) Call(
 					query_log := actions.QueryLog.AddQuery(query.VQL)
 					vql, err := vfilter.Parse(query.VQL)
 					if err != nil {
-						scope.Log("Artifact %s invalid: %s",
+						child_scope.Log("Artifact %s invalid: %s",
 							strings.Join(self.prefix, "."),
 							err.Error())
 						query_log.Close()
@@ -233,9 +234,13 @@ func (self *ArtifactRepositoryPlugin) Call(
 
 			if isEventArtifact(artifact) {
 				wg.Add(1)
-				go eval_request(request, scope)
+				go func(request *actions_proto.VQLCollectorArgs,
+					scope types.Scope) {
+					defer wg.Done()
+
+					eval_request(request, scope)
+				}(request, scope)
 			} else {
-				wg.Add(1)
 				eval_request(request, scope)
 			}
 		}

@@ -50,11 +50,13 @@ import (
 var (
 	mu sync.Mutex
 
-	proxyHandler = http.ProxyFromEnvironment
+	proxyHandler                     = http.ProxyFromEnvironment
+	EmptyCookieJar *ordereddict.Dict = nil
 )
 
 const (
-	HTTP_TAG = "$http_client_cache"
+	HTTP_TAG       = "$http_client_cache"
+	COOKIE_JAR_TAG = "$http_client_cookie_jar"
 )
 
 // Cache http clients in the scope to allow reuse.
@@ -71,21 +73,23 @@ type HttpPluginRequest struct {
 	Url     string      `vfilter:"required,field=url,doc=The URL to fetch"`
 	Params  vfilter.Any `vfilter:"optional,field=params,doc=Parameters to encode as POST or GET query strings"`
 	Headers vfilter.Any `vfilter:"optional,field=headers,doc=A dict of headers to send."`
-	Method  string      `vfilter:"optional,field=method,doc=HTTP method to use (GET, POST)"`
+	Method  string      `vfilter:"optional,field=method,doc=HTTP method to use (GET, POST, PUT, PATCH, DELETE)"`
 	Data    string      `vfilter:"optional,field=data,doc=If specified we write this raw data into a POST request instead of encoding the params above."`
 	Chunk   int         `vfilter:"optional,field=chunk_size,doc=Read input with this chunk size and send each chunk as a row"`
 
 	// Sometimes it is useful to be able to query misconfigured hosts.
-	DisableSSLSecurity bool   `vfilter:"optional,field=disable_ssl_security,doc=Disable ssl certificate verifications."`
-	TempfileExtension  string `vfilter:"optional,field=tempfile_extension,doc=If specified we write to a tempfile. The content field will contain the full path to the tempfile."`
-	RemoveLast         bool   `vfilter:"optional,field=remove_last,doc=If set we delay removal as much as possible."`
-	RootCerts          string `vfilter:"optional,field=root_ca,doc=As a better alternative to disable_ssl_security, allows root ca certs to be added here."`
+	DisableSSLSecurity bool              `vfilter:"optional,field=disable_ssl_security,doc=Disable ssl certificate verifications."`
+	TempfileExtension  string            `vfilter:"optional,field=tempfile_extension,doc=If specified we write to a tempfile. The content field will contain the full path to the tempfile."`
+	RemoveLast         bool              `vfilter:"optional,field=remove_last,doc=If set we delay removal as much as possible."`
+	RootCerts          string            `vfilter:"optional,field=root_ca,doc=As a better alternative to disable_ssl_security, allows root ca certs to be added here."`
+	CookieJar          *ordereddict.Dict `vfilter:"optional,field=cookie_jar,doc=A cookie jar to use if provided. This is a dict of cookie structures."`
 }
 
 type _HttpPluginResponse struct {
 	Url      string
 	Content  string
 	Response int
+	Headers  vfilter.Any
 }
 
 type _HttpPlugin struct{}
@@ -124,17 +128,25 @@ func (self *HTTPClientCache) GetHttpClient(
 		return result, nil
 	}
 
-	// A Unix domain socket.
-	if url_obj.Hostname() == "unix" {
+	// Allow a unix path to be interpreted as simply a http over
+	// unix domain socket (used by e.g. docker)
+	if strings.HasPrefix(arg.Url, "/") {
+		components := strings.Split(arg.Url, ":")
+		if len(components) == 1 {
+			components = append(components, "/")
+		}
+		arg.Url = "http://unix" + components[1]
+
 		result = &http.Client{
 			Timeout: time.Second * 10000,
 			Transport: &http.Transport{
-				Proxy:               proxyHandler,
 				MaxIdleConnsPerHost: 10,
 				DialContext: func(_ context.Context, _, _ string) (
 					net.Conn, error) {
-					return net.Dial("unix", url_obj.Path)
+					return net.Dial("unix", components[0])
 				},
+				TLSNextProto: make(map[string]func(
+					authority string, c *tls.Conn) http.RoundTripper),
 			},
 		}
 		self.cache[key] = result
@@ -145,21 +157,24 @@ func (self *HTTPClientCache) GetHttpClient(
 	// needed to access self signed servers. Ideally we should
 	// add extra ca certs in arg.RootCerts.
 	if arg.DisableSSLSecurity {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.Proxy = proxyHandler
+		transport.MaxIdleConns = 10
+		transport.TLSClientConfig = &tls.Config{
+			InsecureSkipVerify: true,
+		}
+
 		result = &http.Client{
-			Timeout: time.Second * 10000,
-			Transport: &http.Transport{
-				Proxy:        proxyHandler,
-				MaxIdleConns: 10,
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true,
-				},
-			},
+			Timeout:   time.Second * 10000,
+			Jar:       NewDictJar(arg.CookieJar),
+			Transport: transport,
 		}
 		self.cache[key] = result
 		return result, nil
 	}
 
-	result, err = GetDefaultHTTPClient(config_obj, arg.RootCerts)
+	result, err = GetDefaultHTTPClient(
+		config_obj, arg.RootCerts, arg.CookieJar)
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +258,8 @@ func customVerifyConnection(
 
 func GetDefaultHTTPClient(
 	config_obj *config_proto.ClientConfig,
-	extra_roots string) (*http.Client, error) {
+	extra_roots string,
+	cookie_jar *ordereddict.Dict) (*http.Client, error) {
 
 	CA_Pool := x509.NewCertPool()
 	if config_obj != nil {
@@ -262,27 +278,32 @@ func GetDefaultHTTPClient(
 		}
 	}
 
-	return &http.Client{
-		Timeout: time.Second * 10000,
-		Transport: &http.Transport{
-			Proxy: proxyHandler,
-			Dial: (&net.Dialer{
-				KeepAlive: 600 * time.Second,
-			}).Dial,
-			MaxIdleConnsPerHost: 10,
-			MaxIdleConns:        10,
-			TLSClientConfig: &tls.Config{
-				MinVersion:         tls.VersionTLS12,
-				ClientSessionCache: tls.NewLRUClientSessionCache(100),
-				RootCAs:            CA_Pool,
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		ClientSessionCache: tls.NewLRUClientSessionCache(100),
+		RootCAs:            CA_Pool,
 
-				// Not actually skipping, we check the
-				// cert in VerifyPeerCertificate
-				InsecureSkipVerify: true,
-				VerifyConnection:   customVerifyConnection(CA_Pool, config_obj),
-			},
-		},
-	}, nil
+		// Not actually skipping, we check the
+		// cert in VerifyPeerCertificate
+		InsecureSkipVerify: true,
+		NextProtos:         []string{"http/1.1"},
+		VerifyConnection:   customVerifyConnection(CA_Pool, config_obj),
+	}
+	transport.Proxy = proxyHandler
+	transport.Dial = (&net.Dialer{
+		KeepAlive: 600 * time.Second,
+	}).Dial
+	transport.MaxIdleConnsPerHost = 10
+	transport.MaxIdleConns = 10
+
+	result := &http.Client{
+		Timeout:   time.Second * 10000,
+		Jar:       NewDictJar(cookie_jar),
+		Transport: transport,
+	}
+
+	return result, nil
 }
 
 func encodeParams(arg *HttpPluginRequest, scope vfilter.Scope) *url.Values {
@@ -342,35 +363,60 @@ func (self *_HttpPlugin) Call(
 			return
 		}
 
-		// Allow a unix path to be interpreted as simply a http over
-		// unix domain socket (used by e.g. docker)
-		if strings.HasPrefix(arg.Url, "/") {
-			components := strings.Split(arg.Url, ":")
-			if len(components) == 1 {
-				components = append(components, "/")
+		// If the user did not provide a cookie jar we use one for the
+		// session.
+		var ok bool
+
+		if utils.IsNil(arg.CookieJar) {
+			arg.CookieJar, ok = vql_subsystem.CacheGet(
+				scope, COOKIE_JAR_TAG).(*ordereddict.Dict)
+			if !ok {
+				arg.CookieJar = ordereddict.NewDict()
+				vql_subsystem.CacheSet(scope, COOKIE_JAR_TAG, arg.CookieJar)
 			}
-			arg.Url = "http://unix" + components[1]
 		}
 
 		config_obj, _ := artifacts.GetConfig(scope)
-
-		params := encodeParams(arg, scope)
 		client, err := GetHttpClient(config_obj, scope, arg)
 		if err != nil {
 			scope.Log("http_client: %v", err)
 			return
 		}
 
-		data := arg.Data
-		if data == "" {
-			data = params.Encode()
-		}
-
-		req, err := http.NewRequestWithContext(
-			ctx, arg.Method, arg.Url, strings.NewReader(data))
-		if err != nil {
-			scope.Log("%s: %v", self.Name(), err)
-			return
+		var req *http.Request
+		params := encodeParams(arg, scope)
+		switch method := strings.ToUpper(arg.Method); method {
+		case "GET":
+			{
+				req, err = http.NewRequestWithContext(
+					ctx, method, arg.Url, strings.NewReader(arg.Data))
+				if err != nil {
+					scope.Log("%s: %v", self.Name(), err)
+					return
+				}
+				req.URL.RawQuery = params.Encode()
+			}
+		case "POST", "PUT", "PATCH", "DELETE":
+			{
+				// Set body to params if arg.Data is empty
+				if arg.Data == "" && len(*params) != 0 {
+					arg.Data = params.Encode()
+				} else if arg.Data != "" && len(*params) != 0 {
+					// Shouldn't set both params and data. Warn user
+					scope.Log("http_client: Both params and data set. Defaulting to data.")
+				}
+				req, err = http.NewRequestWithContext(
+					ctx, method, arg.Url, strings.NewReader(arg.Data))
+				if err != nil {
+					scope.Log("%s: %v", self.Name(), err)
+					return
+				}
+			}
+		default:
+			{
+				scope.Log("http_client: Invalid HTTP Method %s", method)
+				return
+			}
 		}
 
 		scope.Log("Fetching %v\n", arg.Url)
@@ -417,6 +463,7 @@ func (self *_HttpPlugin) Call(
 		response := &_HttpPluginResponse{
 			Url:      arg.Url,
 			Response: http_resp.StatusCode,
+			Headers:  http_resp.Header,
 		}
 
 		if arg.TempfileExtension != "" {
@@ -508,6 +555,7 @@ func (self _HttpPlugin) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) *vf
 		Name:    self.Name(),
 		Doc:     "Make a http request.",
 		ArgType: type_map.AddType(scope, &HttpPluginRequest{}),
+		Version: 2,
 	}
 }
 

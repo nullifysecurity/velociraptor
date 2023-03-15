@@ -32,7 +32,7 @@ import (
 
 	"github.com/Velocidex/ordereddict"
 	"github.com/Velocidex/yaml/v2"
-	errors "github.com/pkg/errors"
+	errors "github.com/go-errors/errors"
 	"github.com/sergi/go-diff/diffmatchpatch"
 	"github.com/shirou/gopsutil/v3/process"
 	"www.velocidex.com/golang/velociraptor/actions"
@@ -45,6 +45,7 @@ import (
 	"www.velocidex.com/golang/velociraptor/reporting"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/startup"
+	"www.velocidex.com/golang/velociraptor/utils"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/velociraptor/vql/acl_managers"
 	"www.velocidex.com/golang/velociraptor/vql/remapping"
@@ -72,6 +73,14 @@ var (
 		"Normally golden tests run with the readonly datastore so as not to "+
 			"change the fixture. This flag allows updates to the fixtures.").
 		Bool()
+
+	// If the logs emit messages matching these then the test is
+	// considered failed. This helps us catch VQL errors.
+	fatalLogMessagesRegex = []string{
+		"(?i)Symbol .+ not found",
+		"(?i)Field .+ Expecting a .+ arg type, not",
+		"(?i)Artifact .+ not found",
+	}
 )
 
 type testFixture struct {
@@ -95,8 +104,9 @@ func vqlCollectorArgsFromFixture(
 	return vql_collector_args
 }
 
-func makeCtxWithTimeout(duration int) (context.Context, func()) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*60)
+func makeCtxWithTimeout(
+	root_ctx context.Context, duration int) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(root_ctx)
 
 	deadline := time.Now().Add(time.Second * time.Duration(duration))
 	fmt.Printf("Setting deadline to %v\n", deadline)
@@ -154,9 +164,11 @@ func makeCtxWithTimeout(duration int) (context.Context, func()) {
 func runTest(fixture *testFixture, sm *services.Service,
 	config_obj *config_proto.Config) (string, error) {
 
-	ctx := context.Background()
+	ctx := sm.Ctx
+
+	// Limit each test for maxmimum time
 	if !*disable_alarm {
-		sub_ctx, cancel := makeCtxWithTimeout(30)
+		sub_ctx, cancel := makeCtxWithTimeout(ctx, 30)
 		defer cancel()
 
 		ctx = sub_ctx
@@ -170,7 +182,7 @@ func runTest(fixture *testFixture, sm *services.Service,
 	defer os.Remove(tmpfile.Name())
 
 	container, err := reporting.NewContainer(
-		config_obj, tmpfile.Name(), "", 5)
+		config_obj, tmpfile.Name(), "", 5, nil)
 	if err != nil {
 		return "", fmt.Errorf("Can not create output container: %w", err)
 	}
@@ -178,11 +190,12 @@ func runTest(fixture *testFixture, sm *services.Service,
 
 	builder := services.ScopeBuilder{
 		Config:     config_obj,
-		ACLManager: acl_managers.NewRoleACLManager("administrator", "org_admin"),
+		ACLManager: acl_managers.NewRoleACLManager(config_obj, "administrator", "org_admin"),
 		Logger:     log.New(log_writer, "Velociraptor: ", 0),
 		Uploader:   container,
 		Env: ordereddict.NewDict().
 			Set("GoldenOutput", tmpfile.Name()).
+			Set("_SessionId", "F.Golden").
 			Set(constants.SCOPE_MOCK, &remapping.MockingScopeContext{}),
 	}
 
@@ -235,13 +248,11 @@ func runTest(fixture *testFixture, sm *services.Service,
 		}
 	}
 
-	res, err := log_writer.Matches("Symbol .+ not found")
-	if err != nil {
-		return result, err
-	}
-
-	if res {
-		return result, errors.New("Symbol not found error!")
+	for _, msg := range fatalLogMessagesRegex {
+		matches, err := log_writer.Matches(msg)
+		if matches || err != nil {
+			return "", fmt.Errorf("Log out matches %q", msg)
+		}
 	}
 
 	return result, nil
@@ -250,11 +261,7 @@ func runTest(fixture *testFixture, sm *services.Service,
 func doGolden() error {
 	vql_subsystem.RegisterPlugin(&MemoryLogPlugin{})
 	vql_subsystem.RegisterFunction(&WriteFilestoreFunction{})
-
-	if !*disable_alarm {
-		_, cancel := makeCtxWithTimeout(120)
-		defer cancel()
-	}
+	vql_subsystem.RegisterFunction(&MockTimeFunciton{})
 
 	config_obj, err := makeDefaultConfigLoader().LoadAndValidate()
 	if err != nil {
@@ -273,13 +280,18 @@ func doGolden() error {
 
 	failures := []string{}
 
-	if config_obj.Frontend == nil {
-		config_obj.Frontend = &config_proto.FrontendConfig{}
-	}
-	config_obj.Frontend.ServerServices = services.GoldenServicesSpec()
+	config_obj.Services = services.GoldenServicesSpec()
 
 	ctx, cancel := install_sig_handler()
 	defer cancel()
+
+	// Global timeout for the entire test
+	if !*disable_alarm {
+		timeout_ctx, cancel := makeCtxWithTimeout(ctx, 120)
+		defer cancel()
+
+		ctx = timeout_ctx
+	}
 
 	sm, err := startup.StartToolServices(ctx, config_obj)
 	defer sm.Close()
@@ -289,6 +301,12 @@ func doGolden() error {
 	}
 
 	err = filepath.Walk(*golden_command_directory, func(file_path string, info os.FileInfo, err error) error {
+		select {
+		case <-sm.Ctx.Done():
+			return errors.New("Cancelled!")
+		default:
+		}
+
 		if *golden_command_filter != "" &&
 			!strings.HasPrefix(filepath.Base(file_path), *golden_command_filter) {
 			return nil
@@ -348,7 +366,7 @@ func doGolden() error {
 	})
 
 	if err != nil {
-		return fmt.Errorf("golden error: %w", err)
+		return fmt.Errorf("golden error FAIL: %w", err)
 	}
 
 	if len(failures) > 0 {
@@ -492,5 +510,41 @@ func (self WriteFilestoreFunction) Info(
 		Name:    "write_filestore",
 		Doc:     "Write a file on the filestore.",
 		ArgType: type_map.AddType(scope, &WriteFilestoreFunctionArgs{}),
+	}
+}
+
+type MockTimeFuncitonArgs struct {
+	Now int64 `vfilter:"required,field=now"`
+}
+
+type MockTimeFunciton struct{}
+
+func (self MockTimeFunciton) Call(ctx context.Context,
+	scope vfilter.Scope,
+	args *ordereddict.Dict) vfilter.Any {
+
+	arg := &MockTimeFuncitonArgs{}
+	err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
+	if err != nil {
+		scope.Log("mock_time: %s", err)
+		return &vfilter.Null{}
+	}
+
+	clock := &utils.MockClock{time.Unix(arg.Now, 0)}
+	cancel := utils.MockTime(clock)
+	err = vql_subsystem.GetRootScope(scope).AddDestructor(cancel)
+	if err != nil {
+		scope.Log("mock_time: %s", err)
+		return &vfilter.Null{}
+	}
+
+	return true
+}
+
+func (self MockTimeFunciton) Info(
+	scope vfilter.Scope, type_map *vfilter.TypeMap) *vfilter.FunctionInfo {
+	return &vfilter.FunctionInfo{
+		Name:    "mock_time",
+		ArgType: type_map.AddType(scope, &MockTimeFuncitonArgs{}),
 	}
 }

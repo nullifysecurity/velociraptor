@@ -1,5 +1,3 @@
-// +build server_vql
-
 /*
    Velociraptor - Dig Deeper
    Copyright (C) 2019-2022 Rapid7 Inc.
@@ -24,22 +22,25 @@ import (
 	"time"
 
 	"github.com/Velocidex/ordereddict"
+	"github.com/sirupsen/logrus"
 	"www.velocidex.com/golang/velociraptor/acls"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
 	flows_proto "www.velocidex.com/golang/velociraptor/flows/proto"
+	"www.velocidex.com/golang/velociraptor/json"
+	"www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/utils"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/velociraptor/vql/acl_managers"
 	"www.velocidex.com/golang/velociraptor/vql/functions"
-	"www.velocidex.com/golang/velociraptor/vql/tools"
+	"www.velocidex.com/golang/velociraptor/vql/tools/collector"
 	"www.velocidex.com/golang/vfilter/arg_parser"
 
 	"www.velocidex.com/golang/vfilter"
 )
 
 type ScheduleHuntFunctionArg struct {
-	Description   string           `vfilter:"required,field=description,doc=Description of the hunt"`
+	Description   string           `vfilter:"optional,field=description,doc=Description of the hunt"`
 	Artifacts     []string         `vfilter:"required,field=artifacts,doc=A list of artifacts to collect"`
 	Expires       vfilter.LazyExpr `vfilter:"optional,field=expires,doc=A time for expiry (e.g. now() + 1800)"`
 	Spec          vfilter.Any      `vfilter:"optional,field=spec,doc=Parameters to apply to the artifacts"`
@@ -53,6 +54,7 @@ type ScheduleHuntFunctionArg struct {
 	IncludeLabels []string         `vfilter:"optional,field=include_labels,doc=If specified only include these labels"`
 	ExcludeLabels []string         `vfilter:"optional,field=exclude_labels,doc=If specified exclude these labels"`
 	OS            string           `vfilter:"optional,field=os,doc=If specified target this OS"`
+	OrgIds        []string         `vfilter:"optional,field=org_id,doc=If set the collection will be started in the specified orgs."`
 }
 
 type ScheduleHuntFunction struct{}
@@ -97,6 +99,19 @@ func (self *ScheduleHuntFunction) Call(ctx context.Context,
 		return vfilter.Null{}
 	}
 
+	// Only the org admin is allowed to launch on multiple orgs.
+	if len(arg.OrgIds) > 0 {
+		err := vql_subsystem.CheckAccess(scope, acls.ORG_ADMIN)
+		if err != nil {
+			scope.Log("hunt: %v", err)
+			return vfilter.Null{}
+		}
+
+	} else {
+		// Schedule on the current org
+		arg.OrgIds = append(arg.OrgIds, config_obj.OrgId)
+	}
+
 	manager, err := services.GetRepositoryManager(config_obj)
 	if err != nil {
 		scope.Log("hunt: %v", err)
@@ -119,7 +134,8 @@ func (self *ScheduleHuntFunction) Call(ctx context.Context,
 		MaxUploadBytes: arg.MaxBytes,
 	}
 
-	err = tools.AddSpecProtobuf(config_obj, repository, scope,
+	principal := vql_subsystem.GetPrincipal(scope)
+	err = collector.AddSpecProtobuf(ctx, config_obj, repository, scope,
 		arg.Spec, request)
 	if err != nil {
 		scope.Log("hunt: %v", err)
@@ -193,24 +209,61 @@ func (self *ScheduleHuntFunction) Call(ctx context.Context,
 		return vfilter.Null{}
 	}
 
-	// Run the hunt in the ACL context of the caller.
-	acl_manager := acl_managers.NewServerACLManager(
-		config_obj, vql_subsystem.GetPrincipal(scope))
+	org_manager, err := services.GetOrgManager()
+	if err != nil {
+		scope.Log("hunt: %v", err)
+		return vfilter.Null{}
+	}
 
-	hunt_dispatcher, err := services.GetHuntDispatcher(config_obj)
-	if err != nil {
-		scope.Log("hunt: %v", err)
-		return vfilter.Null{}
+	var orgs_we_scheduled []string
+
+	// Schedule the hunt on all the relevant orgs.
+	for _, org_id := range arg.OrgIds {
+		org_config_obj, err := org_manager.GetOrgConfig(org_id)
+		if err != nil {
+			scope.Log("hunt: %v", err)
+			continue
+		}
+
+		// Make sure the user is allowed to collect in that org
+		err = vql_subsystem.CheckAccessInOrg(scope, org_id, acls.COLLECT_CLIENT)
+		if err != nil {
+			scope.Log("hunt: %v", err)
+			continue
+		}
+
+		// Run the hunt in the ACL context of the caller.
+		acl_manager := acl_managers.NewServerACLManager(
+			org_config_obj, vql_subsystem.GetPrincipal(scope))
+
+		hunt_dispatcher, err := services.GetHuntDispatcher(org_config_obj)
+		if err != nil {
+			scope.Log("hunt: %v", err)
+			continue
+		}
+
+		hunt_id, err := hunt_dispatcher.CreateHunt(
+			ctx, org_config_obj, acl_manager, hunt_request)
+		if err != nil {
+			scope.Log("hunt: %v", err)
+			continue
+		}
+
+		orgs_we_scheduled = append(orgs_we_scheduled, org_id)
+
+		hunt_request.HuntId = hunt_id
 	}
-	hunt_id, err := hunt_dispatcher.CreateHunt(
-		ctx, config_obj, acl_manager, hunt_request)
-	if err != nil {
-		scope.Log("hunt: %v", err)
-		return vfilter.Null{}
-	}
+
+	logging.LogAudit(config_obj, principal, "CreateHunt",
+		logrus.Fields{
+			"hunt_id": hunt_request.HuntId,
+			"details": json.MustMarshalString(
+				vfilter.RowToDict(ctx, scope, arg)),
+			"orgs": orgs_we_scheduled,
+		})
 
 	return ordereddict.NewDict().
-		Set("HuntId", hunt_id).
+		Set("HuntId", hunt_request.HuntId).
 		Set("Request", hunt_request)
 }
 
@@ -260,7 +313,7 @@ func (self *AddToHuntFunction) Call(ctx context.Context,
 
 	// Send this
 	if arg.FlowId != "" {
-		err = journal.PushRowsToArtifact(config_obj,
+		err = journal.PushRowsToArtifact(ctx, config_obj,
 			[]*ordereddict.Dict{ordereddict.NewDict().
 				Set("HuntId", arg.HuntId).
 				Set("mutation", &api_proto.HuntMutation{
@@ -272,7 +325,7 @@ func (self *AddToHuntFunction) Call(ctx context.Context,
 				})},
 			"Server.Internal.HuntModification", arg.ClientId, "")
 	} else {
-		err = journal.PushRowsToArtifact(config_obj,
+		err = journal.PushRowsToArtifact(ctx, config_obj,
 			[]*ordereddict.Dict{ordereddict.NewDict().
 				Set("HuntId", arg.HuntId).
 				Set("ClientId", arg.ClientId).

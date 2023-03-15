@@ -1,6 +1,7 @@
 package hunt_dispatcher_test
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"testing"
@@ -31,8 +32,8 @@ type HuntDispatcherTestSuite struct {
 
 func (self *HuntDispatcherTestSuite) SetupTest() {
 	self.ConfigObj = self.TestSuite.LoadConfig()
-	self.ConfigObj.Frontend.ServerServices.FrontendServer = true
-	self.ConfigObj.Frontend.ServerServices.HuntDispatcher = true
+	self.ConfigObj.Services.FrontendServer = true
+	self.ConfigObj.Services.HuntDispatcher = true
 
 	self.LoadArtifacts([]string{`
 name: Server.Internal.HuntUpdate
@@ -100,7 +101,8 @@ func (self *HuntDispatcherTestSuite) TestModifyingHuntFlushToDatastore() {
 	assert.NoError(self.T(), err)
 
 	// Modify a hunt and flush to datastore immediately
-	modification := self.master_dispatcher.ModifyHuntObject("H.1",
+	ctx := context.Background()
+	modification := self.master_dispatcher.ModifyHuntObject(ctx, "H.1",
 		func(hunt *api_proto.Hunt) services.HuntModificationAction {
 			hunt.State = api_proto.Hunt_STOPPED
 			return services.HuntFlushToDatastore
@@ -138,7 +140,8 @@ func (self *HuntDispatcherTestSuite) TestModifyingHuntPropagateChanges() {
 	assert.Equal(self.T(), hunt_obj.State, api_proto.Hunt_RUNNING)
 
 	// Now modify a hunt with services.HuntPropagateChanges
-	modification := self.master_dispatcher.ModifyHuntObject("H.2",
+	ctx := self.Ctx
+	modification := self.master_dispatcher.ModifyHuntObject(ctx, "H.2",
 		func(hunt *api_proto.Hunt) services.HuntModificationAction {
 			hunt.State = api_proto.Hunt_STOPPED
 			return services.HuntPropagateChanges

@@ -45,9 +45,6 @@ message VFSRefreshDirectoryRequest {
             label: HIDDEN,
         }];
 
-    // Deprecated
-    string XXXXvfs_path = 2;
-
     repeated string vfs_components = 4;
 
     uint64 depth = 3 [(sem_type) = {
@@ -185,7 +182,7 @@ service API {
         };
     }
 
-    rpc SetClientMetadata(ClientMetadata) returns (google.protobuf.Empty) {
+    rpc SetClientMetadata(SetClientMetadataRequest) returns (google.protobuf.Empty) {
         option (google.api.http) = {
             post: "/api/v1/SetClientMetadata",
             body: "*"
@@ -211,7 +208,7 @@ service API {
         };
     }
 
-    rpc SetGUIOptions(SetGUIOptionsRequest) returns (google.protobuf.Empty) {
+    rpc SetGUIOptions(SetGUIOptionsRequest) returns (SetGUIOptionsResponse) {
         option (google.api.http) = {
            post: "/api/v1/SetGUIOptions",
            body: "*"
@@ -222,6 +219,39 @@ service API {
     rpc GetUsers(google.protobuf.Empty) returns(Users) {
         option (google.api.http) = {
             get: "/api/v1/GetUsers",
+        };
+    }
+
+    // List all the GUI users in orgs in which we are a member
+    rpc GetGlobalUsers(google.protobuf.Empty) returns(Users) {
+        option (google.api.http) = {
+            get: "/api/v1/GetGlobalUsers",
+        };
+    }
+
+    rpc GetUserRoles(UserRequest) returns(UserRoles) {
+        option (google.api.http) = {
+            get: "/api/v1/GetUserRoles",
+        };
+    }
+
+    rpc SetUserRoles(UserRoles) returns(google.protobuf.Empty) {
+        option (google.api.http) = {
+            post: "/api/v1/SetUserRoles",
+            body: "*",
+        };
+    }
+
+    rpc GetUser(UserRequest) returns(VelociraptorUser) {
+        option(google.api.http) = {
+            get: "/api/v1/GetUser/{name}",
+        };
+    }
+
+    rpc CreateUser(UpdateUserRequest) returns(google.protobuf.Empty) {
+        option (google.api.http) = {
+            post: "/api/v1/CreateUser",
+            body: "*"
         };
     }
 
@@ -238,12 +268,19 @@ service API {
         };
     }
 
-// VFS
+    // VFS
     rpc VFSListDirectory(VFSListRequest) returns (VFSListResponse) {
         option (google.api.http) = {
             get: "/api/v1/VFSListDirectory/{client_id}",
         };
     }
+
+    rpc VFSListDirectoryFiles(GetTableRequest) returns (GetTableResponse) {
+        option (google.api.http) = {
+            get: "/api/v1/VFSListDirectoryFiles",
+        };
+    }
+
 
     rpc VFSRefreshDirectory(VFSRefreshDirectoryRequest) returns (ArtifactCollectorResponse) {
         option (google.api.http) = {
@@ -297,9 +334,17 @@ service API {
         };
     }
 
+    // VQL assistance
     rpc GetKeywordCompletions(google.protobuf.Empty) returns (KeywordCompletions) {
         option (google.api.http) = {
             get: "/api/v1/GetKeywordCompletions",
+        };
+    }
+
+    rpc ReformatVQL(ReformatVQLMessage) returns (ReformatVQLMessage) {
+        option (google.api.http) = {
+            post: "/api/v1/ReformatVQL",
+            body: "*"
         };
     }
 

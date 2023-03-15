@@ -26,11 +26,11 @@ package interrogation
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
 	"github.com/Velocidex/ordereddict"
-	"github.com/pkg/errors"
 	"golang.org/x/time/rate"
 	actions_proto "www.velocidex.com/golang/velociraptor/actions/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
@@ -108,12 +108,13 @@ func (self *EnrollmentService) ProcessEnrollment(
 	if err != nil {
 		return err
 	}
-	_, err = client_info_manager.Get(ctx, client_id)
+
+	client_info, err := client_info_manager.Get(ctx, client_id)
 
 	// If we have a valid client record we do not need to
 	// interrogate. Interrogation happens automatically only once
 	// - the first time a client appears.
-	if err == nil {
+	if err == nil && client_info.LastInterrogateFlowId != "" {
 		return nil
 	}
 
@@ -134,7 +135,7 @@ func (self *EnrollmentService) ProcessEnrollment(
 
 	// Allow the user to override the basic interrogation
 	// functionality.  Check for any customized versions
-	definition, pres := repository.Get(config_obj, "Custom.Generic.Client.Info")
+	definition, pres := repository.Get(ctx, config_obj, "Custom.Generic.Client.Info")
 	if pres {
 		interrogation_artifact = definition.Name
 	}
@@ -156,7 +157,7 @@ func (self *EnrollmentService) ProcessEnrollment(
 			// Notify the client
 			notifier, err := services.GetNotifier(config_obj)
 			if err == nil {
-				notifier.NotifyListener(
+				notifier.NotifyListener(ctx,
 					config_obj, client_id, "Interrogate")
 			}
 		})
@@ -168,7 +169,6 @@ func (self *EnrollmentService) ProcessEnrollment(
 	// flight. We are here because the client_info_manager does not
 	// have the record in cache, so next Get() will just read it from
 	// disk on all minions.
-
 	err = client_info_manager.Set(ctx, &services.ClientInfo{
 		actions_proto.ClientInfo{
 			ClientId:                    client_id,
@@ -205,7 +205,7 @@ func (self *EnrollmentService) ProcessInterrogateResults(
 	client_id, flow_id, artifact string) error {
 
 	file_store_factory := file_store.GetFileStore(config_obj)
-	path_manager, err := artifacts.NewArtifactPathManager(config_obj,
+	path_manager, err := artifacts.NewArtifactPathManager(ctx, config_obj,
 		client_id, flow_id, artifact)
 	if err != nil {
 		return err
@@ -235,9 +235,18 @@ func (self *EnrollmentService) ProcessInterrogateResults(
 			Architecture:                getter("Architecture"),
 			Fqdn:                        getter("Fqdn"),
 			ClientName:                  getter("Name"),
-			ClientVersion:               getter("BuildTime"),
+			ClientVersion:               getter("Version"),
+			BuildUrl:                    getter("build_url"),
 			LastInterrogateFlowId:       flow_id,
 			LastInterrogateArtifactName: artifact,
+		}
+
+		build_time, pres := row.Get("BuildTime")
+		if pres {
+			t, ok := build_time.(time.Time)
+			if ok {
+				client_info.BuildTime = t.UTC().Format(time.RFC3339)
+			}
 		}
 
 		label_array, ok := row.GetStrings("Labels")
@@ -290,7 +299,7 @@ func (self *EnrollmentService) ProcessInterrogateResults(
 		func() {
 			client_info_manager.Flush(ctx, client_id)
 
-			journal.PushRowsToArtifactAsync(config_obj,
+			journal.PushRowsToArtifactAsync(ctx, config_obj,
 				ordereddict.NewDict().
 					Set("ClientId", client_id),
 				"Server.Internal.Interrogation")
@@ -327,6 +336,8 @@ func (self *EnrollmentService) ProcessInterrogateResults(
 	// Update the client indexes for the GUI. Add any keywords we
 	// wish to be searchable in the UI here.
 	for _, term := range []string{
+		"all",
+		client_id,
 		"host:" + client_info.Fqdn,
 		"host:" + client_info.Hostname} {
 		err := indexer.SetIndex(client_id, term)

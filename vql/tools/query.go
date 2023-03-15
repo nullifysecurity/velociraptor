@@ -19,6 +19,7 @@ type QueryPluginArgs struct {
 	Env             *ordereddict.Dict `vfilter:"optional,field=env,doc=A dict of args to insert into the scope."`
 	CpuLimit        float64           `vfilter:"optional,field=cpu_limit,doc=Average CPU usage in percent of a core."`
 	IopsLimit       float64           `vfilter:"optional,field=iops_limit,doc=Average IOPs to target."`
+	Timeout         float64           `vfilter:"optional,field=timeout,doc=Cancel the query after this many seconds"`
 	ProgressTimeout float64           `vfilter:"optional,field=progress_timeout,doc=If no progress is detected in this many seconds, we terminate the query and output debugging information"`
 	OrgId           string            `vfilter:"optional,field=org_id,doc=If specified, the query will run in the specified org space (Use 'root' to refer to the root org)"`
 	Principal       string            `vfilter:"optional,field=runas,doc=If specified, the query will run as the specified user"`
@@ -85,7 +86,7 @@ func (self QueryPlugin) Call(
 			// Impersonation is only allowed for administrator users.
 			err := vql_subsystem.CheckAccess(scope, acls.IMPERSONATION)
 			if err != nil {
-				scope.Log("query: Permission required for runas: %v", err)
+				scope.Log("ERROR:query: Permission required for runas: %v", err)
 				return
 			}
 
@@ -97,8 +98,16 @@ func (self QueryPlugin) Call(
 		// Make a new scope for each artifact.
 		manager, err := services.GetRepositoryManager(org_config_obj)
 		if err != nil {
-			scope.Log("query: %v", err)
+			scope.Log("ERROR:query: %v", err)
 			return
+		}
+
+		if arg.Timeout > 0 {
+			subctx, cancel := context.WithTimeout(
+				ctx, time.Duration(arg.Timeout)*time.Second)
+			defer cancel()
+
+			ctx = subctx
 		}
 
 		subscope := manager.BuildScope(builder).AppendVars(arg.Env)
@@ -141,7 +150,7 @@ func runQuery(
 		runQuery(ctx, scope, output_chan, t.ReduceWithScope(ctx, scope))
 
 	default:
-		scope.Log("query: query should be a string or subquery")
+		scope.Log("ERROR:query: query should be a string or subquery")
 		return
 	}
 }
@@ -177,7 +186,7 @@ func runStringQuery(
 	scope.Log("query: running query %v", query_string)
 	statements, err := vfilter.MultiParse(query_string)
 	if err != nil {
-		scope.Log("query: %v", err)
+		scope.Log("ERROR:query: %v", err)
 		return
 	}
 

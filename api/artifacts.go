@@ -18,10 +18,7 @@
 package api
 
 import (
-	"archive/zip"
 	"bytes"
-	"errors"
-	"fmt"
 	"io/ioutil"
 	"regexp"
 	"strings"
@@ -39,6 +36,7 @@ import (
 	flows_proto "www.velocidex.com/golang/velociraptor/flows/proto"
 	"www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/services"
+	"www.velocidex.com/golang/velociraptor/third_party/zip"
 	"www.velocidex.com/golang/velociraptor/utils"
 )
 
@@ -69,7 +67,7 @@ sources:
 )
 
 func getArtifactFile(
-	config_obj *config_proto.Config,
+	ctx context.Context, config_obj *config_proto.Config,
 	name string) (string, error) {
 
 	manager, err := services.GetRepositoryManager(config_obj)
@@ -82,7 +80,7 @@ func getArtifactFile(
 		return "", err
 	}
 
-	artifact, pres := repository.Get(config_obj, name)
+	artifact, pres := repository.Get(ctx, config_obj, name)
 	if !pres {
 		return default_artifact, nil
 	}
@@ -109,14 +107,14 @@ func ensureArtifactPrefix(definition, prefix string) string {
 		})
 }
 
-func setArtifactFile(config_obj *config_proto.Config, principal string,
-	in *api_proto.SetArtifactRequest,
-	required_prefix string) (
+func setArtifactFile(
+	ctx context.Context, config_obj *config_proto.Config, principal string,
+	in *api_proto.SetArtifactRequest, required_prefix string) (
 	*artifacts_proto.Artifact, error) {
 
 	manager, err := services.GetRepositoryManager(config_obj)
 	if err != nil {
-		return nil, err
+		return nil, Status(config_obj.Verbose, err)
 	}
 
 	switch in.Op {
@@ -127,24 +125,24 @@ func setArtifactFile(config_obj *config_proto.Config, principal string,
 		artifact_definition, err := tmp_repository.LoadYaml(
 			in.Artifact, true /* validate */, false /* built_in */)
 		if err != nil {
-			return nil, err
+			return nil, Status(config_obj.Verbose, err)
 		}
 
 		if !strings.HasPrefix(artifact_definition.Name, required_prefix) {
-			return nil, errors.New(
+			return nil, InvalidStatus(
 				"Modified or custom artifact names must start with '" +
 					required_prefix + "'")
 		}
 
-		return artifact_definition, manager.DeleteArtifactFile(config_obj,
+		return artifact_definition, manager.DeleteArtifactFile(ctx, config_obj,
 			principal, artifact_definition.Name)
 
 	case api_proto.SetArtifactRequest_SET:
-		return manager.SetArtifactFile(
+		return manager.SetArtifactFile(ctx,
 			config_obj, principal, in.Artifact, required_prefix)
 	}
 
-	return nil, errors.New("Unknown op")
+	return nil, InvalidStatus("Unknown op")
 }
 
 func getReportArtifacts(
@@ -160,20 +158,20 @@ func getReportArtifacts(
 
 	manager, err := services.GetRepositoryManager(config_obj)
 	if err != nil {
-		return nil, err
+		return nil, Status(config_obj.Verbose, err)
 	}
 	repository, err := manager.GetGlobalRepository(config_obj)
 	if err != nil {
-		return nil, err
+		return nil, Status(config_obj.Verbose, err)
 	}
 
 	result := &artifacts_proto.ArtifactDescriptors{}
 	names, err := repository.List(ctx, config_obj)
 	if err != nil {
-		return nil, err
+		return nil, Status(config_obj.Verbose, err)
 	}
 	for _, name := range names {
-		artifact, pres := repository.Get(config_obj, name)
+		artifact, pres := repository.Get(ctx, config_obj, name)
 		if pres {
 			for _, report := range artifact.Reports {
 				if report.Type == report_type {
@@ -200,7 +198,7 @@ func searchArtifact(
 	*artifacts_proto.ArtifactDescriptors, error) {
 
 	if config_obj.GUI == nil {
-		return nil, errors.New("GUI not configured")
+		return nil, InvalidStatus("GUI not configured")
 	}
 
 	name_filter_regexp := config_obj.GUI.ArtifactSearchFilter
@@ -243,16 +241,16 @@ func searchArtifact(
 
 	manager, err := services.GetRepositoryManager(config_obj)
 	if err != nil {
-		return nil, err
+		return nil, Status(config_obj.Verbose, err)
 	}
 	repository, err := manager.GetGlobalRepository(config_obj)
 	if err != nil {
-		return nil, err
+		return nil, Status(config_obj.Verbose, err)
 	}
 
 	names, err := repository.List(ctx, config_obj)
 	if err != nil {
-		return nil, err
+		return nil, Status(config_obj.Verbose, err)
 	}
 
 	for _, name := range names {
@@ -260,7 +258,7 @@ func searchArtifact(
 			continue
 		}
 
-		artifact, pres := repository.Get(config_obj, name)
+		artifact, pres := repository.Get(ctx, config_obj, name)
 		if pres {
 			// Skip non matching types
 			if artifact_type != "" &&
@@ -309,12 +307,12 @@ func (self *ApiServer) LoadArtifactPack(
 	users_manager := services.GetUserManager()
 	user_record, org_config_obj, err := users_manager.GetUserFromContext(ctx)
 	if err != nil {
-		return nil, err
+		return nil, Status(self.verbose, err)
 	}
+	principal := user_record.Name
 
-	user_name := user_record.Name
 	permissions := acls.SERVER_ARTIFACT_WRITER
-	perm, err := acls.CheckAccess(org_config_obj, user_record.Name, permissions)
+	perm, err := services.CheckAccess(org_config_obj, principal, permissions)
 	if !perm || err != nil {
 		return nil, status.Error(codes.PermissionDenied,
 			"User is not allowed to upload artifact packs.")
@@ -326,7 +324,7 @@ func (self *ApiServer) LoadArtifactPack(
 	buffer := bytes.NewReader(in.Data)
 	zip_reader, err := zip.NewReader(buffer, int64(len(in.Data)))
 	if err != nil {
-		return nil, err
+		return nil, Status(self.verbose, err)
 	}
 
 	for _, file := range zip_reader.File {
@@ -354,16 +352,14 @@ func (self *ApiServer) LoadArtifactPack(
 				Artifact: artifact_definition,
 			}
 
-			definition, err := setArtifactFile(
-				org_config_obj, user_name, request, prefix)
+			definition, err := setArtifactFile(ctx,
+				org_config_obj, principal, request, prefix)
 			if err == nil {
-				logging.GetLogger(org_config_obj, &logging.Audit).
-					WithFields(logrus.Fields{
-						"user":     user_name,
+				logging.LogAudit(org_config_obj, principal, "LoadArtifactPack",
+					logrus.Fields{
 						"artifact": definition.Name,
-						"details": fmt.Sprintf(
-							"%v", request.Artifact),
-					}).Info("LoadArtifactPack")
+						"details":  request.Artifact,
+					})
 
 				result.SuccessfulArtifacts = append(result.SuccessfulArtifacts,
 					definition.Name)

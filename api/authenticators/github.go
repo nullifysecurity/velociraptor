@@ -54,6 +54,10 @@ func (self *GitHubAuthenticator) IsPasswordLess() bool {
 	return true
 }
 
+func (self *GitHubAuthenticator) AuthRedirectTemplate() string {
+	return self.authenticator.AuthRedirectTemplate
+}
+
 func (self *GitHubAuthenticator) AddHandlers(mux *http.ServeMux) error {
 	mux.Handle(self.base+"auth/github/login", self.oauthGithubLogin())
 	mux.Handle(self.base+"auth/github/callback", self.oauthGithubCallback())
@@ -109,6 +113,20 @@ func (self *GitHubAuthenticator) oauthGithubCallback() http.Handler {
 		if oauthState == nil || r.FormValue("state") != oauthState.Value {
 			logging.GetLogger(self.config_obj, &logging.GUIComponent).
 				Error("invalid oauth github state")
+			http.Redirect(w, r, self.base, http.StatusTemporaryRedirect)
+			return
+		}
+
+		formError := r.FormValue("error")
+		if formError != "" {
+			desc := r.FormValue("error_description")
+			if desc != "" {
+				formError = desc
+			}
+			logging.GetLogger(self.config_obj, &logging.GUIComponent).
+				WithFields(logrus.Fields{
+					"err": formError,
+				}).Error("getUserDataFromGithub")
 			http.Redirect(w, r, self.base, http.StatusTemporaryRedirect)
 			return
 		}

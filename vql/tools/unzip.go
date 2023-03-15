@@ -3,7 +3,6 @@
 package tools
 
 import (
-	"archive/zip"
 	"context"
 	"os"
 	"path/filepath"
@@ -13,6 +12,7 @@ import (
 	"github.com/Velocidex/ordereddict"
 	"www.velocidex.com/golang/velociraptor/accessors"
 	"www.velocidex.com/golang/velociraptor/acls"
+	"www.velocidex.com/golang/velociraptor/third_party/zip"
 	"www.velocidex.com/golang/velociraptor/utils"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/vfilter"
@@ -26,10 +26,10 @@ type UnzipResponse struct {
 }
 
 type UnzipPluginArgs struct {
-	Filename        string `vfilter:"required,field=filename,doc=File to unzip."`
-	Accessor        string `vfilter:"optional,field=accessor,doc=The accessor to use"`
-	FilenameFilter  string `vfilter:"optional,field=filename_filter,doc=Only extract members matching this filter."`
-	OutputDirectory string `vfilter:"required,field=output_directory,doc=Where to unzip to"`
+	Filename        *accessors.OSPath `vfilter:"required,field=filename,doc=File to unzip."`
+	Accessor        string            `vfilter:"optional,field=accessor,doc=The accessor to use"`
+	FilenameFilter  string            `vfilter:"optional,field=filename_filter,doc=Only extract members matching this filter."`
+	OutputDirectory string            `vfilter:"required,field=output_directory,doc=Where to unzip to"`
 }
 
 type UnzipPlugin struct{}
@@ -85,13 +85,13 @@ func (self UnzipPlugin) Call(
 			return
 		}
 
-		s, err := accessor.Lstat(arg.Filename)
+		s, err := accessor.LstatWithOSPath(arg.Filename)
 		if err != nil {
 			scope.Log("unzip: %v", err)
 			return
 		}
 
-		fd, err := accessor.Open(arg.Filename)
+		fd, err := accessor.OpenWithOSPath(arg.Filename)
 		if err != nil {
 			scope.Log("unzip: %v", err)
 			return
@@ -151,7 +151,11 @@ func (self UnzipPlugin) Call(
 					NewPath:      output_path,
 					Size:         int64(n),
 				}
-				output_chan <- output
+				select {
+				case <-ctx.Done():
+					return
+				case output_chan <- output:
+				}
 			}()
 		}
 	}()

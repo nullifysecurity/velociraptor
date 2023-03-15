@@ -26,12 +26,12 @@ package http_comms
 
 import (
 	"context"
-	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	errors "github.com/pkg/errors"
+	"github.com/go-errors/errors"
+	"golang.org/x/time/rate"
 	"google.golang.org/protobuf/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/crypto"
@@ -62,9 +62,7 @@ type Sender struct {
 	clock utils.Clock
 }
 
-func (self *Sender) CleanOnExit(ctx context.Context, wg *sync.WaitGroup) {
-	defer wg.Done()
-
+func (self *Sender) CleanOnExit(ctx context.Context) {
 	<-ctx.Done()
 	self.urgent_buffer.Close()
 	self.ring_buffer.Close()
@@ -72,9 +70,7 @@ func (self *Sender) CleanOnExit(ctx context.Context, wg *sync.WaitGroup) {
 
 // Persistent loop to pump messages from the executor to the ring
 // buffer. This function should never exit in a real client.
-func (self *Sender) PumpExecutorToRingBuffer(
-	ctx context.Context, wg *sync.WaitGroup) {
-	defer wg.Done()
+func (self *Sender) PumpExecutorToRingBuffer(ctx context.Context) {
 
 	// We should never exit from this.
 	defer self.maybeCallOnExit()
@@ -176,9 +172,7 @@ func (self *Sender) PumpExecutorToRingBuffer(
 // to send. This also manages timing and retransmissions - blocks if
 // the server is not available. This function should never exit in a
 // real client.
-func (self *Sender) PumpRingBufferToSendMessage(
-	ctx context.Context, wg *sync.WaitGroup) {
-	defer wg.Done()
+func (self *Sender) PumpRingBufferToSendMessage(ctx context.Context) {
 
 	// We should never exit from this.
 	defer self.maybeCallOnExit()
@@ -210,15 +204,12 @@ func (self *Sender) PumpRingBufferToSendMessage(
 				// from the ring buffer.
 				self.sendMessageList(ctx, compressed_messages, !URGENT, compression)
 				self.ring_buffer.Commit()
-
-				// We need to make sure our memory footprint is as
-				// small as possible. The Velociraptor client
-				// prioritizes low memory footprint over latency. We
-				// just sent data to the server and we wont need that
-				// for a while so we can free our memory to the OS.
-				debug.FreeOSMemory()
 			}
 		}
+
+		self.mu.Lock()
+		release := self.release
+		self.mu.Unlock()
 
 		// Wait a minimum time before sending the next one to
 		// give the executor a chance to fill the queue.
@@ -228,7 +219,7 @@ func (self *Sender) PumpRingBufferToSendMessage(
 
 			// If the queue is too large we need to flush
 			// it out immediately so skip the wait below.
-		case <-self.release:
+		case <-release:
 			continue
 
 			// Wait a minimum amount of time to allow for
@@ -245,24 +236,35 @@ func (self *Sender) Start(
 	ctx context.Context, wg *sync.WaitGroup) {
 
 	wg.Add(1)
-	go self.PumpExecutorToRingBuffer(ctx, wg)
+	go func() {
+		defer wg.Done()
+		self.PumpExecutorToRingBuffer(ctx)
+
+	}()
 
 	wg.Add(1)
-	go self.PumpRingBufferToSendMessage(ctx, wg)
+	go func() {
+		defer wg.Done()
+		self.PumpRingBufferToSendMessage(ctx)
+	}()
 
 	wg.Add(1)
-	go self.CleanOnExit(ctx, wg)
+	go func() {
+		defer wg.Done()
+		self.CleanOnExit(ctx)
+	}()
 }
 
 func NewSender(
 	config_obj *config_proto.Config,
 	connector IConnector,
-	manager crypto.ICryptoManager,
+	crypto_manager crypto.ICryptoManager,
 	executor executor.Executor,
 	ring_buffer IRingBuffer,
 	enroller *Enroller,
 	logger *logging.LogContext,
 	name string,
+	limiter *rate.Limiter,
 	handler string,
 	on_exit func(),
 	clock utils.Clock) (*Sender, error) {
@@ -272,16 +274,19 @@ func NewSender(
 	}
 
 	result := &Sender{
-		NotificationReader: NewNotificationReader(config_obj, connector, manager,
-			executor, enroller, logger, name, handler, on_exit, clock),
+		NotificationReader: NewNotificationReader(
+			config_obj, connector, crypto_manager,
+			executor, enroller, logger, name,
+			limiter, handler, on_exit, clock),
 		ring_buffer: ring_buffer,
 
 		// Urgent buffer is an in memory ring buffer to handle
 		// urgent queries. This ensures urgent queries can
 		// skip the buffer ahead of normal queries.
-		urgent_buffer: NewRingBuffer(config_obj, 2*config_obj.Client.MaxUploadSize),
-		release:       make(chan bool),
-		clock:         clock,
+		urgent_buffer: NewRingBuffer(config_obj, executor.FlowManager(),
+			2*config_obj.Client.MaxUploadSize),
+		release: make(chan bool),
+		clock:   clock,
 	}
 
 	return result, nil

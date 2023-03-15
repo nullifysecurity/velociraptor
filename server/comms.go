@@ -50,6 +50,8 @@ import (
 )
 
 var (
+	packetTooLargeError = errors.New("Packet too large!")
+
 	currentConnections = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "client_comms_current_connections",
 		Help: "Number of currently connected clients.",
@@ -131,8 +133,21 @@ func PrepareFrontendMux(
 	base := config_obj.Frontend.BasePath
 	router.Handle(base+"/healthz", healthz(server_obj))
 	router.Handle(base+"/server.pem", server_pem(config_obj))
-	router.Handle(base+"/control", RecordHTTPStats(control(config_obj, server_obj)))
-	router.Handle(base+"/reader", RecordHTTPStats(reader(server_obj)))
+
+	// DEPRECATED: These are the old handler names - not great
+	// but here for backwards compatibility.
+	router.Handle(base+"/control",
+		RecordHTTPStats(receive_client_messages(config_obj, server_obj)))
+	router.Handle(base+"/reader",
+		RecordHTTPStats(send_client_messages(server_obj)))
+
+	// Send a message to the server.
+	router.Handle(base+"/send_messages",
+		RecordHTTPStats(receive_client_messages(config_obj, server_obj)))
+
+	// Receive new messages from the server.
+	router.Handle(base+"/receive_messages",
+		RecordHTTPStats(send_client_messages(server_obj)))
 
 	// Publicly accessible part of the filestore. NOTE: this
 	// does not have to be a physical directory - it is served
@@ -224,6 +239,13 @@ func readWithLimits(
 	}
 	receiveBytesCounter.Add(float64(n))
 
+	if uint64(n) >= max_upload_size*2 {
+		server_obj.Error("Size exceeded when reading body from %v",
+			req.RemoteAddr)
+
+		return nil, packetTooLargeError
+	}
+
 	message_info, err := server_obj.Decrypt(ctx, buffer.Bytes())
 	if err != nil {
 		server_obj.Debug("Unable to decrypt body from %v: %+v "+
@@ -242,7 +264,7 @@ func readWithLimits(
 // This handler is used to receive messages from the client to the
 // server. These connections are short lived - the client will just
 // post its message and then disconnect.
-func control(
+func receive_client_messages(
 	config_obj *config_proto.Config, server_obj *Server) http.Handler {
 	pad := &crypto_proto.ClientCommunication{}
 	pad.Padding = append(pad.Padding, 0)
@@ -313,6 +335,19 @@ func control(
 		// Read the payload from the client.
 		message_info, err := readWithLimits(ctx, config_obj, server_obj, req)
 		if err != nil {
+			// Drop the packet on the floor to release it from the
+			// client's queue. If the client sends a very large packet
+			// it will be truncated by the above limit, and will not
+			// be possible to decrypt it. By dropping it on the floor
+			// we release it from the client's queue - otherwise it
+			// will just retransmit the same thing again and the
+			// packet will be stuck.
+			if err == packetTooLargeError {
+				w.WriteHeader(http.StatusOK)
+				flusher.Flush()
+				return
+			}
+
 			// Just plain reject with a 403.
 			http.Error(w, "", http.StatusForbidden)
 			return
@@ -322,7 +357,7 @@ func control(
 		// - currently only enrolment requests.
 		if !message_info.Authenticated {
 			err := server_obj.ProcessUnauthenticatedMessages(
-				req.Context(), message_info)
+				req.Context(), config_obj, message_info)
 			if err == nil {
 				// We need to indicate to the client
 				// to start the enrolment
@@ -360,10 +395,9 @@ func control(
 			defer close(sync)
 
 			// Process the request with a different context - if the
-			// client disconnects quickly the request will be
-			// cancelled and aborted. This seems to happen sometimes
-			// on some clients so we enforce a hard timeout for
-			// processing anyway.
+			// client disconnects quickly the request context will be
+			// cancelled and aborted, but we do not want this to
+			// interrupt actually processing the message.
 			subctx, cancel := context.WithTimeout(context.Background(),
 				60*time.Second)
 			defer cancel()
@@ -373,8 +407,18 @@ func control(
 			)
 			if err != nil {
 				server_obj.Error("Error: %v", err)
-			} else {
-				sync <- response
+				return
+			}
+
+			// Wait here for the code below to read from the sync
+			// channel so they can send the results back. If the
+			// client disconnected and the code below has exited we
+			// block here for up to 3 seconds before cancelling the
+			// request anyway (and not sending reply to the client).
+			select {
+			case <-subctx.Done():
+			case sync <- response:
+			case <-time.After(3 * time.Second):
 			}
 		}()
 
@@ -412,7 +456,7 @@ func control(
 // connection will persist up to Client.MaxPoll so we always have a
 // channel to the client. This allows us to send the client jobs
 // immediately with low latency.
-func reader(server_obj *Server) http.Handler {
+func send_client_messages(server_obj *Server) http.Handler {
 	pad := &crypto_proto.ClientCommunication{}
 	pad.Padding = append(pad.Padding, 0)
 	serialized_pad, _ := proto.Marshal(pad)
@@ -494,7 +538,7 @@ func reader(server_obj *Server) http.Handler {
 			}
 
 			// This should trigger an enrollment flow.
-			err = journal.PushRowsToArtifact(org_config_obj,
+			err = journal.PushRowsToArtifact(ctx, org_config_obj,
 				[]*ordereddict.Dict{
 					ordereddict.NewDict().
 						Set("ClientId", source)},
@@ -514,12 +558,13 @@ func reader(server_obj *Server) http.Handler {
 			return
 		}
 
+		// Check for conflicting clients
 		if notifier.IsClientDirectlyConnected(source) {
 
 			// Send a message that there is a client conflict.
 			journal, err := services.GetJournal(org_config_obj)
 			if err == nil {
-				journal.PushRowsToArtifactAsync(org_config_obj,
+				journal.PushRowsToArtifactAsync(ctx, org_config_obj,
 					ordereddict.NewDict().Set("ClientId", source),
 					"Server.Internal.ClientConflict")
 			}

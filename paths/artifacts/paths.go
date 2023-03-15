@@ -27,13 +27,34 @@ type ArtifactPathManager struct {
 	file_store                         api.FileStore
 }
 
-func NewArtifactPathManager(
+func NewArtifactPathManagerWithMode(
 	config_obj *config_proto.Config,
+	client_id, flow_id, full_artifact_name string,
+	mode int) *ArtifactPathManager {
+
+	artifact_name, artifact_source := paths.SplitFullSourceName(full_artifact_name)
+
+	file_store_factory := file_store.GetFileStore(config_obj)
+	return &ArtifactPathManager{
+		config_obj:         config_obj,
+		ClientId:           client_id,
+		FlowId:             flow_id,
+		FullArtifactName:   full_artifact_name,
+		base_artifact_name: artifact_name,
+		source:             artifact_source,
+		mode:               mode,
+		Clock:              utils.RealClock{},
+		file_store:         file_store_factory,
+	}
+}
+
+func NewArtifactPathManager(
+	ctx context.Context, config_obj *config_proto.Config,
 	client_id, flow_id, full_artifact_name string) (
 	*ArtifactPathManager, error) {
 	artifact_name, artifact_source := paths.SplitFullSourceName(full_artifact_name)
 
-	mode, err := GetArtifactMode(config_obj, artifact_name)
+	mode, err := GetArtifactMode(ctx, config_obj, artifact_name)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +304,9 @@ func DayNameToTimestamp(name string) time.Time {
 	return time.Time{}
 }
 
-func GetArtifactMode(config_obj *config_proto.Config, artifact_name string) (int, error) {
+func GetArtifactMode(
+	ctx context.Context, config_obj *config_proto.Config,
+	artifact_name string) (int, error) {
 	manager, err := services.GetRepositoryManager(config_obj)
 	if err != nil {
 		return 0, err
@@ -294,7 +317,8 @@ func GetArtifactMode(config_obj *config_proto.Config, artifact_name string) (int
 		return 0, err
 	}
 
-	artifact_type, err := repository.GetArtifactType(config_obj, artifact_name)
+	artifact_type, err := repository.GetArtifactType(
+		ctx, config_obj, artifact_name)
 	if err != nil {
 		return 0, err
 	}

@@ -30,7 +30,8 @@ import (
 	"time"
 
 	"github.com/Velocidex/ordereddict"
-	errors "github.com/pkg/errors"
+	errors "github.com/go-errors/errors"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"www.velocidex.com/golang/velociraptor/accessors"
@@ -310,6 +311,11 @@ func (self *OSFileSystemAccessor) LstatWithOSPath(full_path *accessors.OSPath) (
 
 func init() {
 	accessors.Register("file", &OSFileSystemAccessor{},
+		`Access the filesystem using the OS API.`)
+
+	// Windows filesystem is already case insensitive so we provide an
+	// alias so artifacts can work with either.
+	accessors.Register("file_nocase", &OSFileSystemAccessor{},
 		`Access the filesystem using the OS API.`)
 
 	// Register a variant which allows following links - be

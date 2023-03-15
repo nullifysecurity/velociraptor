@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	errors "github.com/pkg/errors"
+	"github.com/go-errors/errors"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 )
 
@@ -61,6 +61,11 @@ func ValidateClientConfig(config_obj *config_proto.Config) error {
 
 	config_obj.Version = GetVersion()
 	config_obj.Client.Version = config_obj.Version
+
+	writeback, err := GetWriteback(config_obj.Client)
+	if err == nil {
+		config_obj.Client.Version.InstallTime = writeback.InstallTime
+	}
 
 	for _, url := range config_obj.Client.ServerUrls {
 		if !strings.HasSuffix(url, "/") {

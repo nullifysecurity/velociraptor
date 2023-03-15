@@ -201,7 +201,7 @@ func (self FilterFunction) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) 
 }
 
 type LenFunctionArgs struct {
-	List vfilter.Any `vfilter:"required,field=list,doc=A list of items too filter"`
+	List vfilter.Any `vfilter:"required,field=list,doc=A list of items to filter"`
 }
 type LenFunction struct{}
 
@@ -213,6 +213,14 @@ func (self *LenFunction) Call(ctx context.Context,
 	if err != nil {
 		scope.Log("len: %s", err.Error())
 		return &vfilter.Null{}
+	}
+
+	switch t := arg.List.(type) {
+	case types.LazyExpr:
+		arg.List = t.Reduce(ctx)
+
+	case types.Materializer:
+		arg.List = t.Materialize(ctx, scope)
 	}
 
 	slice := reflect.ValueOf(arg.List)

@@ -94,7 +94,7 @@ func (self *TestSuite) TestQueueManager() {
 		FileBufferLeaseSize: 1,
 	})
 
-	path_manager, err := artifacts.NewArtifactPathManager(self.ConfigObj,
+	path_manager, err := artifacts.NewArtifactPathManager(self.Ctx, self.ConfigObj,
 		"C.123", "", "TestQueue")
 	assert.NoError(self.T(), err)
 
@@ -163,7 +163,7 @@ func (self *TestSuite) TestQueueManagerJsonl() {
 	manager := directory.NewDirectoryQueueManager(
 		self.ConfigObj, file_store).(*directory.DirectoryQueueManager)
 
-	path_manager, err := artifacts.NewArtifactPathManager(self.ConfigObj,
+	path_manager, err := artifacts.NewArtifactPathManager(self.Ctx, self.ConfigObj,
 		"C.123", "", "TestQueue")
 	assert.NoError(self.T(), err)
 
@@ -179,7 +179,7 @@ func (self *TestSuite) TestQueueManagerJsonl() {
 		// For performance critical parts it is more efficient to
 		// build the JSONL manually
 		err = manager.PushEventJsonl(path_manager,
-			[]byte(fmt.Sprintf("{\"Foo\":%q}\n", "Bar")))
+			[]byte(fmt.Sprintf("{\"Foo\":%q}\n", "Bar")), 1)
 		assert.NoError(self.T(), err)
 	}
 

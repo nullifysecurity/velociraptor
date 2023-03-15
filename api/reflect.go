@@ -88,7 +88,7 @@ func (self *ApiServer) GetKeywordCompletions(
 	users := services.GetUserManager()
 	_, org_config_obj, err := users.GetUserFromContext(ctx)
 	if err != nil {
-		return nil, err
+		return nil, Status(self.verbose, err)
 	}
 
 	result := &api_proto.KeywordCompletions{
@@ -111,19 +111,19 @@ func (self *ApiServer) GetKeywordCompletions(
 
 	manager, err := services.GetRepositoryManager(org_config_obj)
 	if err != nil {
-		return nil, err
+		return nil, Status(self.verbose, err)
 	}
 	repository, err := manager.GetGlobalRepository(org_config_obj)
 	if err != nil {
-		return nil, err
+		return nil, Status(self.verbose, err)
 	}
 	names, err := repository.List(ctx, org_config_obj)
 	if err != nil {
-		return nil, err
+		return nil, Status(self.verbose, err)
 	}
 
 	for _, name := range names {
-		artifact, pres := repository.Get(org_config_obj, name)
+		artifact, pres := repository.Get(ctx, org_config_obj, name)
 		if !pres {
 			continue
 		}

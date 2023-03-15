@@ -66,8 +66,13 @@ import (
 	"strings"
 
 	context "golang.org/x/net/context"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"www.velocidex.com/golang/velociraptor/acls"
+	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
 	flows_proto "www.velocidex.com/golang/velociraptor/flows/proto"
 	"www.velocidex.com/golang/velociraptor/json"
+	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/utils"
 )
 
@@ -124,4 +129,39 @@ func vfsRefreshDirectory(
 
 	result, err := self.CollectArtifact(ctx, request)
 	return result, err
+}
+
+// Read the file listing table, but enrich the result with download
+// info.
+func (self *ApiServer) VFSListDirectoryFiles(
+	ctx context.Context,
+	in *api_proto.GetTableRequest) (*api_proto.GetTableResponse, error) {
+
+	defer Instrument("VFSListDirectoryFiles")()
+
+	users := services.GetUserManager()
+	user_record, org_config_obj, err := users.GetUserFromContext(ctx)
+	if err != nil {
+		return nil, Status(self.verbose, err)
+	}
+	principal := user_record.Name
+
+	permissions := acls.READ_RESULTS
+	perm, err := services.CheckAccess(org_config_obj, principal, permissions)
+	if !perm || err != nil {
+		return nil, status.Error(codes.PermissionDenied,
+			"User is not allowed to view the VFS.")
+	}
+
+	vfs_service, err := services.GetVFSService(org_config_obj)
+	if err != nil {
+		return nil, Status(self.verbose, err)
+	}
+
+	result, err := vfs_service.ListDirectoryFiles(ctx, org_config_obj, in)
+	if err != nil {
+		return nil, Status(self.verbose, err)
+	}
+
+	return result, nil
 }

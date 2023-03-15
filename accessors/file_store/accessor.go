@@ -55,7 +55,7 @@ func (self FileStoreFileSystemAccessor) Lstat(filename string) (
 func (self FileStoreFileSystemAccessor) LstatWithOSPath(filename *accessors.OSPath) (
 	accessors.FileInfo, error) {
 
-	fullpath := getFSPathSpec(filename)
+	fullpath := path_specs.FromGenericComponentList(filename.Components)
 	lstat, err := self.file_store.StatFile(fullpath)
 	if err != nil {
 		return nil, err
@@ -84,7 +84,7 @@ func (self FileStoreFileSystemAccessor) ReadDirWithOSPath(
 	filename *accessors.OSPath) (
 	[]accessors.FileInfo, error) {
 
-	fullpath := getFSPathSpec(filename)
+	fullpath := path_specs.FromGenericComponentList(filename.Components)
 	files, err := self.file_store.ListDirectory(fullpath)
 	if err != nil {
 		return nil, err
@@ -116,10 +116,12 @@ func (self FileStoreFileSystemAccessor) OpenWithOSPath(filename *accessors.OSPat
 		return nil, errors.New("Invalid path")
 	}
 
+	var fullpath api.FSPathSpec
+
 	// It is a data store path
 	if filename.Components[0] == "ds:" {
 		ds_path := getDSPathSpec(filename)
-		fullpath := ds_path.AsFilestorePath()
+		fullpath = ds_path.AsFilestorePath()
 		switch ds_path.Type() {
 		case api.PATH_TYPE_DATASTORE_JSON:
 			fullpath = fullpath.SetType(api.PATH_TYPE_FILESTORE_DB_JSON)
@@ -127,27 +129,24 @@ func (self FileStoreFileSystemAccessor) OpenWithOSPath(filename *accessors.OSPat
 		case api.PATH_TYPE_DATASTORE_PROTO:
 			fullpath = fullpath.SetType(api.PATH_TYPE_FILESTORE_DB)
 		}
+	} else {
+		fullpath = path_specs.FromGenericComponentList(filename.Components)
 	}
 
-	fullpath := getFSPathSpec(filename)
 	file, err := self.file_store.ReadFile(fullpath)
 	if err != nil {
-		return nil, err
+		// Try to open the old protobuf style files as a fallback.
+		if fullpath.Type() == api.PATH_TYPE_FILESTORE_DB_JSON {
+			file, err = self.file_store.ReadFile(
+				fullpath.SetType(api.PATH_TYPE_FILESTORE_DB))
+		}
+
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return file, nil
-}
-
-func getFSPathSpec(filename *accessors.OSPath) api.FSPathSpec {
-	result := path_specs.NewUnsafeFilestorePath(filename.Components...)
-	if len(result.Components()) > 0 {
-		last := len(filename.Components) - 1
-		name_type, name := api.GetFileStorePathTypeFromExtension(
-			filename.Components[last])
-		filename.Components[last] = name
-		return result.SetType(name_type)
-	}
-	return result
 }
 
 func getDSPathSpec(filename *accessors.OSPath) api.DSPathSpec {

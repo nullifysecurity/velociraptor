@@ -14,6 +14,9 @@ import (
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/utils"
+	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
+	"www.velocidex.com/golang/vfilter"
+	"www.velocidex.com/golang/vfilter/reformat"
 )
 
 type NotebookManager struct {
@@ -130,7 +133,7 @@ func (self *NotebookManager) CancelNotebookCell(
 	if err != nil {
 		return err
 	}
-	return notifier.NotifyListener(self.config_obj, cell_id,
+	return notifier.NotifyListener(ctx, self.config_obj, cell_id,
 		"CancelNotebookCell")
 }
 
@@ -176,4 +179,11 @@ func NewNotebookManagerService(
 		&NotebookStoreImpl{
 			config_obj: config_obj,
 		}), nil
+}
+
+func (self *NotebookManager) ReformatVQL(
+	ctx context.Context, vql string) (string, error) {
+
+	scope := vql_subsystem.MakeScope()
+	return reformat.ReFormatVQL(scope, vql, vfilter.DefaultFormatOptions)
 }

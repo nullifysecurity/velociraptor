@@ -13,6 +13,11 @@ func (self *UserManager) DeleteUser(
 	ctx context.Context,
 	org_config_obj *config_proto.Config, username string) error {
 
+	err := validateUsername(org_config_obj, username)
+	if err != nil {
+		return err
+	}
+
 	org_manager, err := services.GetOrgManager()
 	if err != nil {
 		return err
@@ -38,7 +43,7 @@ func (self *UserManager) DeleteUser(
 
 	// Also remove the ACLs for the user from all orgs.
 	for _, org_record := range org_manager.ListOrgs() {
-		org_config_obj, err := org_manager.GetOrgConfig(org_record.OrgId)
+		org_config_obj, err := org_manager.GetOrgConfig(org_record.Id)
 		if err != nil {
 			continue
 		}

@@ -22,3 +22,21 @@
 .react-calendar .react-calendar__month-view__days__day--weekend {
     color: var(--accent-color);
 }
+
+.regex_array_item {
+    display: flex;
+}
+
+.regex_array_item .regex-form {
+    width: 100%;
+}
+
+input[type="checkbox"][value="Y"] {
+    accent-color: var(--color-btn-default-background-hover);
+}
+
+.custom-control-input:checked ~ .custom-control-label::before {
+    color: var(--color-foreground);
+    border-color: var(--color-btn-default-background-hover);
+    background-color: var(--accent-color);
+}

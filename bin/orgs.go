@@ -37,7 +37,7 @@ func doOrgLs() error {
 	if err != nil {
 		return fmt.Errorf("loading config file: %w", err)
 	}
-	config_obj.Frontend.ServerServices = services.GenericToolServices()
+	config_obj.Services = services.GenericToolServices()
 
 	ctx, cancel := install_sig_handler()
 	defer cancel()
@@ -69,7 +69,7 @@ func doOrgUserAdd() error {
 	if err != nil {
 		return fmt.Errorf("loading config file: %w", err)
 	}
-	config_obj.Frontend.ServerServices = services.GenericToolServices()
+	config_obj.Services = services.GenericToolServices()
 
 	ctx, cancel := install_sig_handler()
 	defer cancel()
@@ -98,7 +98,7 @@ func doOrgUserAdd() error {
 		return err
 	}
 
-	record.Orgs = append(record.Orgs, &api_proto.Org{
+	record.Orgs = append(record.Orgs, &api_proto.OrgRecord{
 		Name: org_record.OrgName,
 		Id:   org_record.OrgId,
 	})
@@ -115,7 +115,7 @@ func doOrgCreate() error {
 		return fmt.Errorf("loading config file: %w", err)
 	}
 
-	config_obj.Frontend.ServerServices = services.GenericToolServices()
+	config_obj.Services = services.GenericToolServices()
 
 	ctx, cancel := install_sig_handler()
 	defer cancel()
@@ -151,7 +151,7 @@ func doOrgDelete() error {
 		return fmt.Errorf("loading config file: %w", err)
 	}
 
-	config_obj.Frontend.ServerServices = services.GenericToolServices()
+	config_obj.Services = services.GenericToolServices()
 
 	ctx, cancel := install_sig_handler()
 	defer cancel()

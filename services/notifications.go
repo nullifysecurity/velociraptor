@@ -41,13 +41,15 @@ type Notifier interface {
 
 	// Send a notification to a specific listener based on its id
 	// that was registered above.
-	NotifyListener(config_obj *config_proto.Config, id, tag string) error
+	NotifyListener(ctx context.Context, config_obj *config_proto.Config,
+		id, tag string) error
 
 	// Notify a directly connected listener.
 	NotifyDirectListener(id string)
 
 	// Notify in the near future - no guarantee of delivery.
-	NotifyListenerAsync(config_obj *config_proto.Config, id, tag string)
+	NotifyListenerAsync(ctx context.Context,
+		config_obj *config_proto.Config, id, tag string)
 
 	// Check if there is someone listening for the specified id. This
 	// method queries all minion nodes to check if the client is
@@ -58,6 +60,8 @@ type Notifier interface {
 
 	// Returns a list of all clients directly connected at present.
 	ListClients() []string
+
+	CountConnectedClients() uint64
 
 	// Check only the current node if the client is connected.
 	IsClientDirectlyConnected(client_id string) bool

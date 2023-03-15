@@ -30,6 +30,10 @@ func (self *SamlAuthenticator) IsPasswordLess() bool {
 	return true
 }
 
+func (self *SamlAuthenticator) AuthRedirectTemplate() string {
+	return self.authenticator.AuthRedirectTemplate
+}
+
 func (self *SamlAuthenticator) AddHandlers(mux *http.ServeMux) error {
 
 	logger := logging.Manager.GetLogger(self.config_obj, &logging.GUIComponent)
@@ -121,13 +125,12 @@ Contact your system administrator to get an account, then try again.
 </body></html>
 `, username)
 
-			logging.GetLogger(self.config_obj, &logging.Audit).
-				WithFields(logrus.Fields{
-					"user":   username,
+			logging.LogAudit(self.config_obj, username, "User rejected by GUI",
+				logrus.Fields{
 					"remote": r.RemoteAddr,
 					"method": r.Method,
 					"error":  err.Error(),
-				}).Error("User rejected by GUI")
+				})
 
 			return
 		}

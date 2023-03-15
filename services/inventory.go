@@ -23,12 +23,18 @@ func GetInventory(config_obj *config_proto.Config) (Inventory, error) {
 	return org_manager.Services(config_obj.OrgId).Inventory()
 }
 
+// Options to the AddTool() API
 type ToolOptions struct {
 	// Tool is being upgraded.
 	Upgrade bool
 
 	// Admin is overriding tool in inventory.
 	AdminOverride bool
+
+	// Tool definition is from an artifact definition. Hold onto this
+	// as one of the prestine versions so the user can reset it back
+	// if needed.
+	ArtifactDefinition bool
 }
 
 type Inventory interface {
@@ -36,7 +42,8 @@ type Inventory interface {
 	Get() *artifacts_proto.ThirdParty
 
 	// Probe for a specific tool without materializing the tool.
-	ProbeToolInfo(name string) (*artifacts_proto.Tool, error)
+	ProbeToolInfo(ctx context.Context, config_obj *config_proto.Config,
+		name string) (*artifacts_proto.Tool, error)
 
 	// Get information about a specific tool. If the tool is set
 	// to serve locally, the tool will be fetched from its
@@ -54,7 +61,7 @@ type Inventory interface {
 	// actually valid and available, they need to call
 	// GetToolInfo() after this to force the tool to be
 	// materialized.
-	AddTool(config_obj *config_proto.Config,
+	AddTool(ctx context.Context, config_obj *config_proto.Config,
 		tool *artifacts_proto.Tool, opts ToolOptions) error
 
 	// Remove the tool from the inventory.

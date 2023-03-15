@@ -43,8 +43,14 @@ var pathComponentsTestFixture = []pathComponentsTestFixtureType{
 	{"foo", []_PathFilterer{
 		_LiteralComponent{"foo"},
 	}},
-	{"foo**5", []_PathFilterer{
-		_RecursiveComponent{`foo.*\z(?ms)`, 5},
+	// A ** has to start at the begining of the component, otherwise
+	// it is not considered a recursive component and just interpreted
+	// as a normal wild card.
+	{"foo**", []_PathFilterer{
+		&_RegexComponent{regexp: `foo.*.*\z(?ms)`},
+	}},
+	{"**5", []_PathFilterer{
+		_RecursiveComponent{`.*\z(?ms)`, 5},
 	}},
 	{"*.exe", []_PathFilterer{
 		&_RegexComponent{regexp: `.*\.exe\z(?ms)`},
@@ -113,6 +119,7 @@ var _GlobFixture = []struct {
 	{"Recursive matches zero or more", []string{"/usr/bin/X11/**/diff"}},
 	{"Recursive matches none at end", []string{"/bin/bash/**"}},
 	{"Match masked by two matches", []string{"/usr/bin", "/usr/*/diff"}},
+	{"Multiple globs matching same file", []string{"/bin/bash", "/bin/ba*"}},
 }
 
 func GetMockFileSystemAccessor() accessors.FileSystemAccessor {

@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkg/errors"
+	"github.com/go-errors/errors"
 	"google.golang.org/protobuf/proto"
 	artifacts_proto "www.velocidex.com/golang/velociraptor/artifacts/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
@@ -87,7 +87,9 @@ func (self *Dummy) Get() *artifacts_proto.ThirdParty {
 	return proto.Clone(self.binaries).(*artifacts_proto.ThirdParty)
 }
 
-func (self *Dummy) ProbeToolInfo(name string) (*artifacts_proto.Tool, error) {
+func (self *Dummy) ProbeToolInfo(
+	ctx context.Context, config_obj *config_proto.Config,
+	name string) (*artifacts_proto.Tool, error) {
 	for _, tool := range self.Get().Tools {
 		if tool.Name == name {
 			return tool, nil
@@ -144,15 +146,15 @@ func (self *Dummy) materializeTool(
 		var err error
 		tool.Url, err = getGithubRelease(ctx, self.Client, config_obj, tool)
 		if err != nil {
-			return errors.Wrap(
-				err, "While resolving github release "+tool.GithubProject)
+			return fmt.Errorf("While resolving github release %v: %w",
+				tool.GithubProject, err)
 		}
 	}
 
 	// We have no idea where the file is.
 	if tool.Url == "" {
-		return errors.New(fmt.Sprintf(
-			"Tool %v has no url defined - upload it manually.", tool.Name))
+		return fmt.Errorf(
+			"Tool %v has no url defined - upload it manually.", tool.Name)
 	}
 
 	fd, err := self.getTempFile(config_obj, tool.Filename, tool.Url)
@@ -180,8 +182,8 @@ func (self *Dummy) materializeTool(
 
 	// If the download failed, we can not store this tool.
 	if res.StatusCode != 200 {
-		return errors.New(fmt.Sprintf("Unable to download file from %v: %v",
-			tool.Url, res.Status))
+		return fmt.Errorf("Unable to download file from %v: %v",
+			tool.Url, res.Status)
 	}
 	sha_sum := sha256.New()
 
@@ -216,20 +218,20 @@ func getGithubRelease(ctx context.Context, Client HTTPClient,
 	defer res.Body.Close()
 
 	if res.StatusCode != 200 {
-		return "", errors.New(fmt.Sprintf("Error: %v", res.Status))
+		return "", fmt.Errorf("Error: %v", res.Status)
 	}
 
 	response, err := ioutil.ReadAll(res.Body)
 	if err != nil {
-		return "", errors.Wrap(err,
-			"While make Github API call to "+url)
+		return "", fmt.Errorf(
+			"While make Github API call to %v: %w ", url, err)
 	}
 
 	api_obj := &githubReleasesAPI{}
 	err = json.Unmarshal(response, &api_obj)
 	if err != nil {
-		return "", errors.Wrap(err,
-			"While make Github API call to "+url)
+		return "", fmt.Errorf(
+			"While make Github API call to  %v: %w ", url, err)
 	}
 
 	release_re, err := regexp.Compile(tool.GithubAssetRegex)
@@ -248,11 +250,13 @@ func getGithubRelease(ctx context.Context, Client HTTPClient,
 	return "", errors.New("Release not found from github API " + url)
 }
 
-func (self *Dummy) AddTool(config_obj *config_proto.Config,
+func (self *Dummy) AddTool(
+	ctx context.Context, config_obj *config_proto.Config,
 	tool_request *artifacts_proto.Tool,
 	opts services.ToolOptions) error {
 	if opts.Upgrade {
-		existing_tool, err := self.ProbeToolInfo(tool_request.Name)
+		existing_tool, err := self.ProbeToolInfo(
+			ctx, config_obj, tool_request.Name)
 		if err == nil {
 			// Ignore the request if the existing
 			// definition is better than the new one.

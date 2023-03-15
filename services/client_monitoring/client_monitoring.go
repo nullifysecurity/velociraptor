@@ -164,11 +164,19 @@ func (self *ClientEventTable) compileArtifactCollectorArgs(
 		return nil, err
 	}
 
+	var log_delay uint64
+	if config_obj.Frontend != nil &&
+		config_obj.Frontend.Resources != nil &&
+		config_obj.Frontend.Resources.DefaultMonitoringLogBatchTime > 0 {
+		log_delay = config_obj.Frontend.Resources.DefaultMonitoringLogBatchTime
+	}
+
 	return launcher.CompileCollectorArgs(
 		ctx, config_obj, acl_managers.NullACLManager{},
 		repository, services.CompilerOptions{
 			ObfuscateNames:         true,
 			IgnoreMissingArtifacts: true,
+			LogBatchTime:           log_delay,
 		}, artifact)
 }
 
@@ -244,14 +252,14 @@ func (self *ClientEventTable) setClientMonitoringState(
 	}
 
 	if principal != "" {
-		logging.GetLogger(config_obj, &logging.Audit).
-			WithFields(logrus.Fields{
+		logging.LogAudit(config_obj, principal, "SetClientMonitoringState",
+			logrus.Fields{
 				"user":  principal,
 				"state": self.state,
-			}).Info("SetClientMonitoringState")
+			})
 	}
 
-	err = journal.PushRowsToArtifact(config_obj,
+	err = journal.PushRowsToArtifact(ctx, config_obj,
 		[]*ordereddict.Dict{
 			ordereddict.NewDict().
 				Set("setter", self.id).
@@ -263,11 +271,14 @@ func (self *ClientEventTable) setClientMonitoringState(
 		return err
 	}
 
-	notifier, err := services.GetNotifier(config_obj)
-	if err != nil {
-		return err
-	}
+	// This does not happen usually - on when running in GUI mode
+	// because we need low latency there.
 	if config_obj.Defaults.EventChangeNotifyAllClients {
+		notifier, err := services.GetNotifier(config_obj)
+		if err != nil {
+			return err
+		}
+
 		for _, c := range notifier.ListClients() {
 			notifier.NotifyDirectListener(c)
 		}
@@ -339,6 +350,31 @@ func (self *ClientEventTable) GetClientUpdateEventTableMessage(
 	}
 }
 
+func (self *ClientEventTable) ProcessServerMetadataModificationEvent(
+	ctx context.Context,
+	config_obj *config_proto.Config,
+	event *ordereddict.Dict) {
+
+	// Only trigger on server metadata changes
+	client_id, pres := event.GetString("client_id")
+	if !pres || client_id != "server" {
+		return
+	}
+
+	logger := logging.GetLogger(self.config_obj, &logging.FrontendComponent)
+	logger.Info("<green>client_monitoring</>: Reloading table because server metadata was updated")
+
+	err := self.load_from_file(ctx, config_obj)
+	if err != nil {
+		logger := logging.GetLogger(
+			config_obj, &logging.FrontendComponent)
+		logger.Error("self.setClientMonitoringState: %v", err)
+	}
+
+	// Update version to reflect the new time.
+	self.state.Version = uint64(self.Clock.Now().UnixNano())
+}
+
 func (self *ClientEventTable) ProcessArtifactModificationEvent(
 	ctx context.Context,
 	config_obj *config_proto.Config, event *ordereddict.Dict) {
@@ -351,7 +387,7 @@ func (self *ClientEventTable) ProcessArtifactModificationEvent(
 	}
 
 	logger := logging.GetLogger(config_obj, &logging.FrontendComponent)
-	logger.Info("Updating Client Event Table because %v was updated", modified_name)
+	logger.Info("<green>Updating Client Event Table</> because %v was updated", modified_name)
 
 	setter, _ := event.GetString("setter")
 
@@ -477,15 +513,27 @@ func NewClientMonitoringService(
 		ctx, "Server.Internal.ArtifactModification",
 		"client_monitoring_service")
 
+	metadata_mod_event, metadata_mod_event_cancel := journal.Watch(
+		ctx, "Server.Internal.MetadataModifications",
+		"client_monitoring_service")
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		defer cancel()
+		defer metadata_mod_event_cancel()
 
 		for {
 			select {
 			case <-ctx.Done():
 				return
+
+			case event, ok := <-metadata_mod_event:
+				if !ok {
+					return
+				}
+				event_table.ProcessServerMetadataModificationEvent(
+					ctx, config_obj, event)
 
 			case event, ok := <-events:
 				if !ok {

@@ -282,7 +282,11 @@ func (self *ClientInfoManager) Start(
 
 	// Start syncing the mutation_manager
 	wg.Add(1)
-	go self.MutationSync(ctx, wg, config_obj)
+	go func() {
+		defer wg.Done()
+
+		self.MutationSync(ctx, config_obj)
+	}()
 
 	// Only the master node writes to storage - there is no need to
 	// flush to disk that frequently because the master keeps a hot
@@ -296,7 +300,13 @@ func (self *ClientInfoManager) Start(
 				time.Millisecond
 		}
 
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
+
+			// When we teardown write the data to storage if needed.
+			defer self.lru.Flush()
+
 			for {
 				select {
 				case <-ctx.Done():
@@ -344,8 +354,7 @@ func (self *ClientInfoManager) Start(
 }
 
 func (self *ClientInfoManager) MutationSync(
-	ctx context.Context, wg *sync.WaitGroup, config_obj *config_proto.Config) {
-	defer wg.Done()
+	ctx context.Context, config_obj *config_proto.Config) {
 
 	sync_time := time.Duration(10) * time.Second
 	if config_obj.Frontend != nil && config_obj.Frontend.Resources != nil &&
@@ -383,7 +392,7 @@ func (self *ClientInfoManager) MutationSync(
 				// Update the ping info to the latest
 				//self.UpdateMostRecentPing()
 
-				journal.PushRowsToArtifactAsync(config_obj,
+				journal.PushRowsToArtifactAsync(ctx, config_obj,
 					ordereddict.NewDict().
 						Set("Mutation", self.mutation_manager.GetMutation()).
 						Set("From", self.uuid),
@@ -529,8 +538,8 @@ func (self *ClientInfoManager) FlushAll() {
 	}
 
 	logger := logging.GetLogger(self.config_obj, &logging.FrontendComponent)
-	logger.Debug("ClientInfoManager: Writing %v records to storage",
-		len(to_flush))
+	logger.Debug("ClientInfoManager: Writing %v records to storage for org %v",
+		len(to_flush), self.config_obj.OrgId)
 	// Flush items outside the lock so we do block during IO.
 	for _, item := range to_flush {
 		item.Flush()
@@ -538,7 +547,7 @@ func (self *ClientInfoManager) FlushAll() {
 }
 
 func (self *ClientInfoManager) Clear() {
-	self.lru.Purge()
+	self.lru.Flush()
 }
 
 func (self *ClientInfoManager) Remove(ctx context.Context, client_id string) {
@@ -552,8 +561,22 @@ func (self *ClientInfoManager) Get(
 		return nil, err
 	}
 
+	// If the client is presently connected, then update the current
+	// last_seen time because it is more accurate than the ping
+	// messages written.
+	ping := uint64(0)
+	notifier, err := services.GetNotifier(self.config_obj)
+	if err == nil {
+		if notifier.IsClientDirectlyConnected(client_id) {
+			ping = uint64(utils.GetTime().Now().UnixNano() / 1000)
+		}
+	}
+
 	// Return a copy so it can be read safely.
 	cached_info.mu.Lock()
+	if ping > 0 {
+		cached_info.record.Ping = ping
+	}
 	res := cached_info.record.Copy()
 	cached_info.mu.Unlock()
 
@@ -562,6 +585,14 @@ func (self *ClientInfoManager) Get(
 
 func (self *ClientInfoManager) Set(
 	ctx context.Context, client_info *services.ClientInfo) error {
+
+	if client_info.ClientId == "" {
+		return invalidError
+	}
+
+	// Force next read to come from storage.
+	self.Remove(ctx, client_info.ClientId)
+
 	db, err := datastore.GetDB(self.config_obj)
 	if err != nil {
 		return err
@@ -663,9 +694,6 @@ func NewClientInfoManager(config_obj *config_proto.Config) *ClientInfoManager {
 
 		mutation_manager: NewMutationManager(),
 	}
-
-	// When we teardown write the data to storage if needed.
-	defer service.lru.Purge()
 
 	service.lru.SetCacheSizeLimit(int(expected_clients))
 

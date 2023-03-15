@@ -22,12 +22,13 @@ import (
 	"context"
 
 	"github.com/Velocidex/ordereddict"
-	errors "github.com/pkg/errors"
+	errors "github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/services"
+	utils "www.velocidex.com/golang/velociraptor/utils"
 )
 
 var (
@@ -49,7 +50,9 @@ func CheckClientStatus(
 
 	stats, err := client_manager.GetStats(ctx, client_id)
 	if err != nil {
-		return err
+		// No client record was found yet. This is ok and can happen
+		// if the host is not properly enrolled yet.
+		return nil
 	}
 
 	// Check the client's event table for validity.
@@ -77,7 +80,8 @@ func CheckClientStatus(
 
 		clientEventUpdateCounter.Inc()
 		err := client_manager.QueueMessageForClient(
-			ctx, client_id, update_message, true, nil)
+			ctx, client_id, update_message,
+			services.NOTIFY_CLIENT, utils.BackgroundWriter)
 		if err != nil {
 			return err
 		}
@@ -139,7 +143,7 @@ func CheckClientStatus(
 	latest_timestamp := uint64(0)
 	for _, hunt := range hunts {
 		// Notify the hunt manager that we need to hunt this client.
-		journal.PushRowsToArtifactAsync(config_obj,
+		journal.PushRowsToArtifactAsync(ctx, config_obj,
 			ordereddict.NewDict().
 				Set("HuntId", hunt.HuntId).
 				Set("ClientId", client_id),

@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	errors "github.com/pkg/errors"
+	errors "github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,7 +55,7 @@ type TestSuite struct {
 
 func (self *TestSuite) SetupTest() {
 	self.ConfigObj = self.LoadConfig()
-	self.ConfigObj.Frontend.ServerServices = &config_proto.ServerServicesConfig{
+	self.ConfigObj.Services = &config_proto.ServerServicesConfig{
 		IndexServer: true,
 	}
 	self.ConfigObj.Client.WritebackLinux = ""
@@ -131,10 +131,11 @@ func (self *TestSuite) TestEncDecServerToClient() {
 		if err != nil {
 			t.Fatal(err)
 		}
-		message_info.IterateJobs(context.Background(),
-			func(ctx context.Context, item *crypto_proto.VeloMessage) {
+		message_info.IterateJobs(context.Background(), self.ConfigObj,
+			func(ctx context.Context, item *crypto_proto.VeloMessage) error {
 				assert.Equal(t, item.Name, "OMG it's a string")
 				assert.Equal(t, item.AuthState, crypto_proto.VeloMessage_AUTHENTICATED)
+				return nil
 			})
 	}
 
@@ -170,11 +171,12 @@ func (self *TestSuite) TestEncDecClientToServerWithSpoof() {
 	}
 
 	assert.Equal(t, message_info.Source, self.client_id)
-	err = message_info.IterateJobs(context.Background(),
-		func(ctx context.Context, msg *crypto_proto.VeloMessage) {
+	err = message_info.IterateJobs(context.Background(), self.ConfigObj,
+		func(ctx context.Context, msg *crypto_proto.VeloMessage) error {
 			// Make sure the spoofed source is ignored, and the
 			// correct source is relayed in the VeloMessage.
 			assert.Equal(t, msg.Source, self.client_id)
+			return nil
 		})
 	assert.NoError(t, err)
 }
@@ -188,7 +190,7 @@ func (self *TestSuite) _EncryptMessageListWithSpoofedPackedMessage(
 
 	plain_text, err := proto.Marshal(message_list)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, 0)
 	}
 
 	compressed_message_lists := [][]byte{plain_text}
@@ -207,7 +209,7 @@ func (self *TestSuite) _EncryptMessageListWithSpoofedPackedMessage(
 
 	serialized_packed_message_list, err := proto.Marshal(packed_message_list)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, 0)
 	}
 
 	comms := output_cipher.ClientCommunication()
@@ -215,7 +217,7 @@ func (self *TestSuite) _EncryptMessageListWithSpoofedPackedMessage(
 	// Each packet has a new IV.
 	_, err = rand.Read(comms.PacketIv)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, 0)
 	}
 
 	encrypted_serialized_packed_message_list, err := client.EncryptSymmetric(
@@ -232,7 +234,7 @@ func (self *TestSuite) _EncryptMessageListWithSpoofedPackedMessage(
 
 	result, err := proto.Marshal(comms)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, 0)
 	}
 
 	return result, nil
@@ -264,11 +266,12 @@ func (self *TestSuite) TestEncDecClientToServer() {
 			t.Fatal(err)
 		}
 
-		message_info.IterateJobs(context.Background(),
-			func(ctx context.Context, item *crypto_proto.VeloMessage) {
+		message_info.IterateJobs(context.Background(), self.ConfigObj,
+			func(ctx context.Context, item *crypto_proto.VeloMessage) error {
 				assert.Equal(t, item.Name, "OMG it's a string")
 				assert.Equal(
 					t, item.AuthState, crypto_proto.VeloMessage_AUTHENTICATED)
+				return nil
 			})
 	}
 

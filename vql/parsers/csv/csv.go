@@ -27,18 +27,19 @@ import (
 	"www.velocidex.com/golang/velociraptor/accessors"
 	"www.velocidex.com/golang/velociraptor/acls"
 	"www.velocidex.com/golang/velociraptor/file_store/csv"
+	"www.velocidex.com/golang/velociraptor/json"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	vfilter "www.velocidex.com/golang/vfilter"
 	"www.velocidex.com/golang/vfilter/arg_parser"
 )
 
 type ParseCSVPluginArgs struct {
-	Filenames   []string `vfilter:"required,field=filename,doc=CSV files to open"`
-	Accessor    string   `vfilter:"optional,field=accessor,doc=The accessor to use"`
-	AutoHeaders bool     `vfilter:"optional,field=auto_headers,doc=If unset the first row is headers"`
-	Separator   string   `vfilter:"optional,field=separator,doc=Comma separator (default ',')"`
-	Comment     string   `vfilter:"optional,field=comment,doc=The single character that should be considered a comment"`
-	Columns     []string `vfilter:"optional,field=columns,doc=The columns to use"`
+	Filenames   []*accessors.OSPath `vfilter:"required,field=filename,doc=CSV files to open"`
+	Accessor    string              `vfilter:"optional,field=accessor,doc=The accessor to use"`
+	AutoHeaders bool                `vfilter:"optional,field=auto_headers,doc=If unset the first row is headers"`
+	Separator   string              `vfilter:"optional,field=separator,doc=Comma separator (default ',')"`
+	Comment     string              `vfilter:"optional,field=comment,doc=The single character that should be considered a comment"`
+	Columns     []string            `vfilter:"optional,field=columns,doc=The columns to use"`
 }
 
 type ParseCSVPlugin struct{}
@@ -72,7 +73,7 @@ func (self ParseCSVPlugin) Call(
 					scope.Log("parse_csv: %v", err)
 					return
 				}
-				fd, err := accessor.Open(filename)
+				fd, err := accessor.OpenWithOSPath(filename)
 				if err != nil {
 					scope.Log("Unable to open file %s: %v",
 						filename, err)
@@ -263,7 +264,8 @@ func (self WriteCSVPlugin) Call(
 			defer file.Close()
 
 			config_obj, _ := vql_subsystem.GetServerConfig(scope)
-			writer = csv.GetCSVAppender(config_obj, scope, file, true)
+			writer = csv.GetCSVAppender(
+				config_obj, scope, file, true, json.DefaultEncOpts())
 			defer writer.Close()
 
 		default:

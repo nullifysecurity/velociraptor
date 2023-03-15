@@ -5,10 +5,9 @@ import (
 	"io"
 	"strings"
 
-	jsonpatch "github.com/evanphx/json-patch"
+	jsonpatch "github.com/evanphx/json-patch/v5"
 	"www.velocidex.com/golang/velociraptor/acls"
 	acl_proto "www.velocidex.com/golang/velociraptor/acls/proto"
-	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/json"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/startup"
@@ -64,10 +63,7 @@ func doGrant() error {
 	ctx, cancel := install_sig_handler()
 	defer cancel()
 
-	if config_obj.Frontend == nil {
-		config_obj.Frontend = &config_proto.FrontendConfig{}
-	}
-	config_obj.Frontend.ServerServices = services.GenericToolServices()
+	config_obj.Services = services.GenericToolServices()
 
 	sm, err := startup.StartToolServices(ctx, config_obj)
 	defer sm.Close()
@@ -95,7 +91,7 @@ func doGrant() error {
 		return err
 	}
 
-	existing_policy, err := acls.GetPolicy(org_config_obj, principal)
+	existing_policy, err := services.GetPolicy(org_config_obj, principal)
 	if err != nil && err != io.EOF {
 		existing_policy = &acl_proto.ApiClientACL{}
 	}
@@ -140,7 +136,7 @@ func doGrant() error {
 		}
 	}
 
-	return acls.SetPolicy(org_config_obj, principal, new_policy)
+	return services.SetPolicy(org_config_obj, principal, new_policy)
 }
 
 func doShow() error {
@@ -160,14 +156,14 @@ func doShow() error {
 	}
 
 	principal := *show_command_principal
-	existing_policy, err := acls.GetPolicy(config_obj, principal)
+	existing_policy, err := services.GetPolicy(config_obj, principal)
 	if err != nil {
 		return fmt.Errorf("Unable to load existing policy for '%v' ",
 			principal)
 	}
 
 	if *show_command_effective {
-		existing_policy, err = acls.GetEffectivePolicy(config_obj, principal)
+		existing_policy, err = services.GetEffectivePolicy(config_obj, principal)
 		if err != nil {
 			return fmt.Errorf("Unable to load existing policy for '%v' ",
 				principal)

@@ -1,5 +1,3 @@
-// +build server_vql
-
 package flows
 
 import (
@@ -107,7 +105,11 @@ func (self ParallelPlugin) Call(
 					subscope.AppendVars(job)
 
 					for row := range arg.Query.Eval(ctx, subscope) {
-						output_chan <- row
+						select {
+						case <-ctx.Done():
+							return
+						case output_chan <- row:
+						}
 					}
 				}
 			}()
@@ -178,7 +180,11 @@ func breakIntoScopes(
 		}
 
 		for i := int64(0); i < total_rows; i += step_size {
-			output_chan <- ordereddict.NewDict().
+			select {
+			case <-ctx.Done():
+				return
+
+			case output_chan <- ordereddict.NewDict().
 				Set("ClientId", arg.ClientId).
 				Set("FlowId", arg.FlowId).
 
@@ -194,7 +200,8 @@ func breakIntoScopes(
 				Set("NotebookCellId", arg.NotebookCellId).
 				Set("NotebookCellTable", arg.NotebookCellTable).
 				Set("StartRow", i).
-				Set("Limit", step_size)
+				Set("Limit", step_size):
+			}
 		}
 
 	}()
@@ -230,7 +237,11 @@ func breakHuntIntoScopes(
 				})
 			if err == nil {
 				for job := range flow_job {
-					output_chan <- job
+					select {
+					case <-ctx.Done():
+						return
+					case output_chan <- job:
+					}
 				}
 			}
 		}

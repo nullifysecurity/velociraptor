@@ -8,6 +8,11 @@ package proto;
 
 option go_package = "www.velocidex.com/golang/velociraptor/api/proto";
 
+message ReformatVQLMessage {
+    string vql = 1;
+}
+
+
 message Env {
     string key = 1;
     string value = 2;
@@ -100,6 +105,10 @@ message NotebookCell {
     string data  = 3;
     string cell_id = 4;
     repeated string messages = 5;
+
+    // True if there are more messages than are included in the
+    // messages field above.
+    bool more_messages = 12;
 
     int64 timestamp = 6;
     int64 duration = 10;

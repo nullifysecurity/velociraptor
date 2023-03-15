@@ -42,8 +42,8 @@ tools:
   url: https://www.example2.com/
 
 `})
-	self.ConfigObj.Frontend.ServerServices.NotebookService = true
-	self.ConfigObj.Frontend.ServerServices.UserManager = true
+	self.ConfigObj.Services.NotebookService = true
+	self.ConfigObj.Services.UserManager = true
 
 	self.TestSuite.SetupTest()
 }
@@ -60,7 +60,8 @@ func (self *ServicesTestSuite) TestUpgradeTools() {
 		Name: "Tool1",
 		Url:  "https://www.company.com",
 	}
-	err = inventory_service.AddTool(self.ConfigObj, tool_definition,
+	ctx := self.Ctx
+	err = inventory_service.AddTool(ctx, self.ConfigObj, tool_definition,
 		services.ToolOptions{
 			// This flag signifies that an admin explicitly set
 			// this tool. We never overwrite an admin's setting.
@@ -165,9 +166,9 @@ func (self *ServicesTestSuite) TestCreateUserInOrgs() {
 			// The nonce will be random each time so we eliminate it from
 			// the golden image.
 			assert.True(self.T(), org_record.Nonce != "")
-			org_record.Nonce = "Nonce Of " + org_record.OrgId
+			org_record.Nonce = "Nonce Of " + org_record.Id
 
-			org_id := org_record.OrgId
+			org_id := org_record.Id
 			org_config_obj, err := org_manager.GetOrgConfig(org_id)
 			assert.NoError(self.T(), err)
 

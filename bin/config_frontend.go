@@ -5,8 +5,8 @@ package main
 import (
 	"fmt"
 
-	"github.com/Velocidex/survey"
-	errors "github.com/pkg/errors"
+	"github.com/AlecAivazis/survey/v2"
+	errors "github.com/go-errors/errors"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/utils"

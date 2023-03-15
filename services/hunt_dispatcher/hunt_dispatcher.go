@@ -136,7 +136,7 @@ func (self *HuntDispatcher) participateAllConnectedClients(
 		}
 
 		// Notify the hunt manager about the new client
-		journal.PushRowsToArtifactAsync(config_obj,
+		journal.PushRowsToArtifactAsync(ctx, config_obj,
 			ordereddict.NewDict().
 				Set("HuntId", hunt_id).
 				Set("ClientId", c),
@@ -223,10 +223,14 @@ func (self *HuntDispatcher) ApplyFuncOnHunts(
 	cb func(hunt *api_proto.Hunt) error) error {
 
 	// Take a snapshot of the hunts list.
+	var hunts []*api_proto.Hunt
 	self.mu.Lock()
-	hunts := self.getHunts()
+	for _, h := range self.getHunts() {
+		hunts = append(hunts, proto.Clone(h).(*api_proto.Hunt))
+	}
 	self.mu.Unlock()
 
+	// Read only copy for callback
 	for _, hunt := range hunts {
 		err := cb(hunt)
 		if err != nil {
@@ -268,14 +272,14 @@ func (self *HuntDispatcher) GetHunt(hunt_id string) (*api_proto.Hunt, bool) {
 // Therefore, writers may write mutations and expect they take an
 // unspecified time to appear in the hunt details.
 func (self *HuntDispatcher) MutateHunt(
-	config_obj *config_proto.Config,
+	ctx context.Context, config_obj *config_proto.Config,
 	mutation *api_proto.HuntMutation) error {
 	journal, err := services.GetJournal(config_obj)
 	if err != nil {
 		return err
 	}
 
-	journal.PushRowsToArtifactAsync(config_obj,
+	journal.PushRowsToArtifactAsync(ctx, config_obj,
 		ordereddict.NewDict().
 			Set("hunt_id", mutation.HuntId).
 			Set("mutation", mutation),
@@ -287,7 +291,7 @@ func (self *HuntDispatcher) MutateHunt(
 // Modify the hunt object under lock and also inform all other
 // dispatchers about the new state.
 func (self *HuntDispatcher) ModifyHuntObject(
-	hunt_id string,
+	ctx context.Context, hunt_id string,
 	cb func(hunt *api_proto.Hunt) services.HuntModificationAction) services.HuntModificationAction {
 
 	logger := logging.GetLogger(self.config_obj, &logging.FrontendComponent)
@@ -326,7 +330,7 @@ func (self *HuntDispatcher) ModifyHuntObject(
 		if err == nil {
 			// Make sure these are pushed out ASAP to the other
 			// dispatchers.
-			journal.PushRowsToArtifact(self.config_obj,
+			journal.PushRowsToArtifact(ctx, self.config_obj,
 				[]*ordereddict.Dict{
 					ordereddict.NewDict().
 						Set("HuntId", hunt_id).
@@ -348,7 +352,7 @@ func (self *HuntDispatcher) ModifyHuntObject(
 		if err == nil {
 			// Make sure these are pushed out ASAP to the other
 			// dispatchers.
-			journal.PushRowsToArtifact(self.config_obj,
+			journal.PushRowsToArtifact(ctx, self.config_obj,
 				[]*ordereddict.Dict{
 					ordereddict.NewDict().
 						Set("HuntId", hunt_id).
@@ -461,9 +465,9 @@ func (self *HuntDispatcher) Refresh(config_obj *config_proto.Config) error {
 			atomic.StoreUint64(&self.last_timestamp, hunt_obj.StartTime)
 			dispatcherCurrentTimestamp.Set(float64(last_timestamp))
 		}
-
 		self.hunts[hunt_id] = &HuntRecord{Hunt: hunt_obj}
 	}
+
 	return nil
 }
 
@@ -508,8 +512,7 @@ func (self *HuntDispatcher) CreateHunt(
 	hunt.Artifacts = hunt.StartRequest.Artifacts
 	hunt.ArtifactSources = []string{}
 	for _, artifact := range hunt.StartRequest.Artifacts {
-		for _, source := range GetArtifactSources(
-			config_obj, artifact) {
+		for _, source := range GetArtifactSources(ctx, config_obj, artifact) {
 			hunt.ArtifactSources = append(
 				hunt.ArtifactSources, path.Join(artifact, source))
 		}
@@ -545,8 +548,13 @@ func (self *HuntDispatcher) CreateHunt(
 	if err != nil {
 		return "", err
 	}
+
+	// Set the collection ID already on the hunt request - all flows
+	// from this hunt will have the same flow id.
+	hunt.StartRequest.FlowId = utils.CreateFlowIdFromHuntId(hunt.HuntId)
 	hunt.StartRequest.CompiledCollectorArgs = append(
 		hunt.StartRequest.CompiledCollectorArgs, compiled...)
+	hunt.StartRequest.Creator = hunt.Creator
 
 	// We allow our caller to determine if hunts are created in
 	// the running state or the paused state.
@@ -568,7 +576,7 @@ func (self *HuntDispatcher) CreateHunt(
 		return "", err
 	}
 
-	err = journal.PushRowsToArtifact(config_obj,
+	err = journal.PushRowsToArtifact(ctx, config_obj,
 		[]*ordereddict.Dict{row}, "System.Hunt.Creation",
 		"server", hunt.HuntId)
 	if err != nil {
@@ -647,7 +655,21 @@ func NewHuntDispatcher(
 		service.ProcessUpdate)
 }
 
+var (
+	NextHuntIdForTests string
+)
+
+func SetHuntIdForTests(id string) {
+	NextHuntIdForTests = id
+}
+
 func GetNewHuntId() string {
+	if NextHuntIdForTests != "" {
+		result := NextHuntIdForTests
+		NextHuntIdForTests = ""
+		return result
+	}
+
 	buf := make([]byte, 8)
 	_, _ = rand.Read(buf)
 

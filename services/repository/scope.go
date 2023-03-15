@@ -12,6 +12,8 @@ import (
 	"www.velocidex.com/golang/velociraptor/services"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/velociraptor/vql/acl_managers"
+	"www.velocidex.com/golang/velociraptor/vql/grouper"
+	"www.velocidex.com/golang/velociraptor/vql/materializer"
 	"www.velocidex.com/golang/velociraptor/vql/remapping"
 	"www.velocidex.com/golang/velociraptor/vql/sorter"
 	"www.velocidex.com/golang/vfilter"
@@ -21,6 +23,10 @@ func _build(self services.ScopeBuilder, from_scratch bool) vfilter.Scope {
 	env := ordereddict.NewDict()
 	if self.Env != nil {
 		env.MergeFrom(self.Env)
+	}
+	_, pres := env.Get("_SessionId")
+	if !pres {
+		env.Set("_SessionId", "")
 	}
 
 	if self.Repository == nil {
@@ -78,6 +84,8 @@ func _build(self services.ScopeBuilder, from_scratch bool) vfilter.Scope {
 
 	// Use our own sorter
 	scope.SetSorter(sorter.MergeSorter{ChunkSize: 10000})
+	scope.SetGrouper(grouper.NewMergeSortGrouperFactory(self.Config, 10000))
+	scope.SetMaterializer(materializer.NewMaterializer())
 
 	artifact_plugin := NewArtifactRepositoryPlugin(self.Repository, self.Config)
 	env.Set("Artifact", artifact_plugin)
@@ -114,7 +122,7 @@ func _build(self services.ScopeBuilder, from_scratch bool) vfilter.Scope {
 		// Reduce permissions based on the configuration.
 		if self.ACLManager != nil {
 			new_acl_manager, err := acl_managers.GetRemappingACLManager(
-				self.ACLManager, self.Config.Remappings)
+				self.Config, self.ACLManager, self.Config.Remappings)
 			if err != nil {
 				scope.Log("Applying remapping: %v", err)
 			}

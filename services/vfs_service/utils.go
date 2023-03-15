@@ -11,6 +11,7 @@ import (
 	flows_proto "www.velocidex.com/golang/velociraptor/flows/proto"
 	"www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/services"
+	vjournal "www.velocidex.com/golang/velociraptor/services/journal"
 	"www.velocidex.com/golang/velociraptor/utils"
 	"www.velocidex.com/golang/velociraptor/vql/acl_managers"
 	"www.velocidex.com/golang/vfilter"
@@ -48,7 +49,7 @@ func watchForFlowCompletion(
 
 		builder := services.ScopeBuilder{
 			Config:     config_obj,
-			ACLManager: acl_managers.NewRoleACLManager("administrator"),
+			ACLManager: acl_managers.NewRoleACLManager(config_obj, "administrator"),
 			Env: ordereddict.NewDict().
 				Set("artifact_name", artifact_name),
 			Logger: logging.NewPlainLogger(config_obj,
@@ -74,13 +75,8 @@ func watchForFlowCompletion(
 					return
 				}
 
-				flow := &flows_proto.ArtifactCollectorContext{}
-				flow_any, pres := event.Get("Flow")
-				if !pres {
-					continue
-				}
-
-				err := utils.ParseIntoProtobuf(flow_any, flow)
+				// Extract the flow description from the event.
+				flow, err := vjournal.GetFlowFromQueue(config_obj, event)
 				if err != nil {
 					continue
 				}

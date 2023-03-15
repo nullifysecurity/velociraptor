@@ -16,7 +16,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pkg/errors"
+	"github.com/Velocidex/ttlcache/v2"
+	"github.com/go-errors/errors"
 	"google.golang.org/protobuf/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	vcrypto "www.velocidex.com/golang/velociraptor/crypto"
@@ -39,6 +40,12 @@ type CryptoManager struct {
 	// and therefore the same RSA keys.
 	cipher_lru *CipherLRU
 
+	// A cache of unauthenticated cipher objects. They will expire
+	// from the cache within a few minutes but this avoids us having
+	// to decrypt them during enrollment when all messages are
+	// unauthenticated.
+	unauthenticated_lru *ttlcache.Cache
+
 	caPool *x509.CertPool
 
 	logger *logging.LogContext
@@ -48,10 +55,17 @@ type CryptoManager struct {
 func (self *CryptoManager) Clear() {
 	self.cipher_lru.Clear()
 	self.Resolver.Clear()
+	self.unauthenticated_lru.Flush()
 }
 
 func (self *CryptoManager) ClientId() string {
 	return self.client_id
+}
+
+// Delete all caches related to the subject name (client id).
+func (self *CryptoManager) DeleteSubject(client_id string) {
+	self.cipher_lru.DeleteCipher(client_id)
+	self.Resolver.DeleteSubject(client_id)
 }
 
 func (self *CryptoManager) GetCSR() ([]byte, error) {
@@ -77,19 +91,24 @@ func NewCryptoManager(config_obj *config_proto.Config,
 	public_key_resolver PublicKeyResolver,
 	logger *logging.LogContext) (
 	*CryptoManager, error) {
+
 	private_key, err := crypto_utils.ParseRsaPrivateKeyFromPemStr(private_key_pem)
 	if err != nil {
 		return nil, err
 	}
 
-	return &CryptoManager{
-		config:      config_obj,
-		private_key: private_key,
-		client_id:   client_id,
-		Resolver:    public_key_resolver,
-		cipher_lru:  NewCipherLRU(config_obj.Frontend.Resources.ExpectedClients),
-		logger:      logging.GetLogger(config_obj, &logging.ClientComponent),
-	}, nil
+	result := &CryptoManager{
+		config:              config_obj,
+		private_key:         private_key,
+		client_id:           client_id,
+		Resolver:            public_key_resolver,
+		cipher_lru:          NewCipherLRU(config_obj.Frontend.Resources.ExpectedClients),
+		unauthenticated_lru: ttlcache.NewCache(),
+		logger:              logging.GetLogger(config_obj, &logging.ClientComponent),
+	}
+
+	result.unauthenticated_lru.SetTTL(time.Second * 60)
+	return result, nil
 }
 
 /* Verify the HMAC protecting the cipher properties blob.
@@ -130,7 +149,7 @@ func EncryptSymmetric(
 
 	base_crypter, err := aes.NewCipher(cipher_properties.Key)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, 0)
 	}
 
 	mode := cipher.NewCBCEncrypter(base_crypter, iv)
@@ -154,7 +173,7 @@ func decryptSymmetric(
 
 	base_crypter, err := aes.NewCipher(cipher_properties.Key)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, 0)
 	}
 
 	mode := cipher.NewCBCDecrypter(base_crypter, iv)
@@ -182,12 +201,19 @@ func (self *CryptoManager) getAuthState(
 
 	// Verify the cipher signature using the certificate known for
 	// the sender.
-	public_key, pres := self.Resolver.GetPublicKey(config_obj, cipher_metadata.Source)
+	client_id := utils.ClientIdFromSource(cipher_metadata.Source)
+	public_key, pres := self.Resolver.GetPublicKey(
+		config_obj, cipher_metadata.Source)
 	if !pres {
-		// We dont know who we are talking to so we can not
-		// trust them.
-		return false, errors.New(
-			fmt.Sprintf("No cert found for %s", cipher_metadata.Source))
+		// Try to extract an org id from the source in case the public
+		// key was added without one.
+		public_key, pres = self.Resolver.GetPublicKey(config_obj, client_id)
+		if !pres {
+			// We dont know who we are talking to so we can not trust
+			// them.
+			return false,
+				fmt.Errorf("No cert found for %s", cipher_metadata.Source)
+		}
 	}
 
 	hashed := sha256.Sum256(serialized_cipher)
@@ -196,10 +222,26 @@ func (self *CryptoManager) getAuthState(
 	err := rsa.VerifyPKCS1v15(public_key, crypto.SHA256, hashed[:],
 		cipher_metadata.Signature)
 	if err != nil {
-		return false, errors.WithStack(err)
+		return false, errors.Wrap(err, 0)
 	}
 
 	return true, nil
+}
+
+func (self *CryptoManager) getCachedCipher(encrypted_cipher []byte) (*_Cipher, bool) {
+	cipher, ok := self.cipher_lru.GetByInboundCipher(encrypted_cipher)
+	if ok {
+		return cipher, ok
+	}
+
+	cipher_any, err := self.unauthenticated_lru.Get(string(encrypted_cipher))
+	if err == nil {
+		cipher, ok := cipher_any.(*_Cipher)
+		if ok {
+			return cipher, true
+		}
+	}
+	return nil, false
 }
 
 /* Decrypts an encrypted parcel and produces a MessageInfo. */
@@ -209,7 +251,7 @@ func (self *CryptoManager) Decrypt(cipher_text []byte) (*vcrypto.MessageInfo, er
 	communications := &crypto_proto.ClientCommunication{}
 	err = proto.Unmarshal(cipher_text, communications)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, 0)
 	}
 
 	// An empty message is not an error but we can't figure out the
@@ -218,7 +260,7 @@ func (self *CryptoManager) Decrypt(cipher_text []byte) (*vcrypto.MessageInfo, er
 		return &vcrypto.MessageInfo{}, nil
 	}
 
-	cipher, ok := self.cipher_lru.GetByInboundCipher(communications.EncryptedCipher)
+	cipher, ok := self.getCachedCipher(communications.EncryptedCipher)
 	if ok {
 		// Check HMAC to save checking the RSA signature for
 		// malformed packets.
@@ -235,7 +277,7 @@ func (self *CryptoManager) Decrypt(cipher_text []byte) (*vcrypto.MessageInfo, er
 		}
 
 		// Cipher was cached so we trust it
-		msg_info.Authenticated = true
+		msg_info.Authenticated = cipher.authenticated
 		msg_info.Source = cipher.cipher_metadata.Source
 
 		return msg_info, nil
@@ -255,7 +297,7 @@ func (self *CryptoManager) Decrypt(cipher_text []byte) (*vcrypto.MessageInfo, er
 	cipher_properties := &crypto_proto.CipherProperties{}
 	err = proto.Unmarshal(serialized_cipher, cipher_properties)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, 0)
 	}
 
 	// Check HMAC first to save checking the RSA signature for
@@ -277,7 +319,7 @@ func (self *CryptoManager) Decrypt(cipher_text []byte) (*vcrypto.MessageInfo, er
 	cipher_metadata := &crypto_proto.CipherMetadata{}
 	err = proto.Unmarshal(serialized_metadata, cipher_metadata)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, 0)
 	}
 
 	msg_info, org_config_obj, err := self.extractMessageInfo(
@@ -293,6 +335,11 @@ func (self *CryptoManager) Decrypt(cipher_text []byte) (*vcrypto.MessageInfo, er
 	msg_info.Authenticated, err = self.getAuthState(
 		org_config_obj, cipher_metadata, serialized_cipher, cipher_properties)
 
+	// Make sure the message source is set from the cipher_metadata
+	// overriding the internal Source. The source is cryptographically
+	// verified by the encryption of the outer envelop.
+	msg_info.Source = cipher_metadata.Source
+
 	// If we could verify the authentication state and it
 	// was authenticated, we are now allowed to cache the
 	// cipher in the input cache. The next packet from
@@ -304,19 +351,21 @@ func (self *CryptoManager) Decrypt(cipher_text []byte) (*vcrypto.MessageInfo, er
 				cipher_metadata:   cipher_metadata,
 				encrypted_cipher:  communications.EncryptedCipher,
 				cipher_properties: cipher_properties,
+				authenticated:     msg_info.Authenticated,
 			},
 			nil, /* outbound_cipher */
 		)
-
-		msg_info.Authenticated = true
-		msg_info.Source = cipher_metadata.Source
 		return msg_info, nil
 	}
 
-	// Make sure the message source is set from the cipher_metadata
-	// overriding the internal Source. The source is cryptographically
-	// verified by the encryption of the outer envelop.
-	msg_info.Source = cipher_metadata.Source
+	self.unauthenticated_lru.Set(
+		msg_info.Source,
+		&_Cipher{
+			cipher_metadata:   cipher_metadata,
+			encrypted_cipher:  communications.EncryptedCipher,
+			cipher_properties: cipher_properties,
+			authenticated:     false,
+		})
 	return msg_info, nil
 }
 
@@ -340,7 +389,7 @@ func (self *CryptoManager) extractMessageInfo(
 	packed_message_list := &crypto_proto.PackedMessageList{}
 	err = proto.Unmarshal(plain, packed_message_list)
 	if err != nil {
-		return nil, nil, errors.WithStack(err)
+		return nil, nil, errors.Wrap(err, 0)
 	}
 
 	// Get the org id from the nonce
@@ -361,6 +410,7 @@ func (self *CryptoManager) extractMessageInfo(
 	}
 
 	return &vcrypto.MessageInfo{
+		Version: communications.ApiVersion,
 		// Hold onto the compressed MessageList buffers.
 		RawCompressed: packed_message_list.MessageList,
 		Compression:   packed_message_list.Compression,
@@ -381,13 +431,13 @@ func (self *CryptoManager) EncryptMessageList(
 
 	plain_text, err := proto.Marshal(message_list)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, 0)
 	}
 
 	if compression == crypto_proto.PackedMessageList_ZCOMPRESSION {
 		plain_text, err = utils.Compress(plain_text)
 		if err != nil {
-			return nil, errors.WithStack(err)
+			return nil, errors.Wrap(err, 0)
 		}
 	}
 
@@ -426,9 +476,9 @@ func (self *CryptoManager) Encrypt(
 		// Build a new cipher
 		public_key, pres := self.Resolver.GetPublicKey(org_config_obj, destination)
 		if !pres {
-			return nil, errors.New(fmt.Sprintf(
+			return nil, fmt.Errorf(
 				"No certificate found for destination %v",
-				destination))
+				destination)
 		}
 
 		cipher, err := NewCipher(self.client_id, self.private_key, public_key)
@@ -450,7 +500,7 @@ func (self *CryptoManager) Encrypt(
 
 	serialized_packed_message_list, err := proto.Marshal(packed_message_list)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, 0)
 	}
 
 	comms := output_cipher.ClientCommunication()
@@ -458,7 +508,7 @@ func (self *CryptoManager) Encrypt(
 	// Each packet has a new IV.
 	_, err = rand.Read(comms.PacketIv)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, 0)
 	}
 
 	encrypted_serialized_packed_message_list, err := EncryptSymmetric(
@@ -475,7 +525,7 @@ func (self *CryptoManager) Encrypt(
 
 	result, err := proto.Marshal(comms)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, 0)
 	}
 
 	return result, nil

@@ -88,6 +88,10 @@ func (self *GoogleAuthenticator) IsPasswordLess() bool {
 	return true
 }
 
+func (self *GoogleAuthenticator) AuthRedirectTemplate() string {
+	return self.authenticator.AuthRedirectTemplate
+}
+
 // Check that the user is proerly authenticated.
 func (self *GoogleAuthenticator) AuthenticateUserHandler(
 	parent http.Handler) http.Handler {
@@ -233,8 +237,8 @@ func installLogoff(config_obj *config_proto.Config, mux *http.ServeMux) {
 			old_username, ok := params["username"]
 			username := ""
 			if ok && len(old_username) == 1 {
-				logger := logging.GetLogger(config_obj, &logging.Audit)
-				logger.Info("Logging off %v", old_username[0])
+				logging.LogAudit(
+					config_obj, old_username[0], "LogOff", logrus.Fields{})
 				username = old_username[0]
 			}
 
@@ -292,6 +296,12 @@ func authenticateUserHandle(
 			Picture: claims.Picture,
 		}
 
+		// NOTE: This context is NOT the same context that is received
+		// by the API handlers. This context sits on the incoming side
+		// of the GRPC gateway. We stuff our data into the
+		// GRPC_USER_CONTEXT of the context and the code will convert
+		// this value into a GRPC metadata.
+
 		// Must use json encoding because grpc can not handle
 		// binary data in metadata.
 		serialized, _ := json.Marshal(user_info)
@@ -309,18 +319,18 @@ func reject_with_username(
 	config_obj *config_proto.Config,
 	w http.ResponseWriter, r *http.Request,
 	err error, username, login_url, provider string) {
-	logger := logging.GetLogger(config_obj, &logging.Audit)
+
 	// Log into the audit log.
-	logger.WithFields(logrus.Fields{
-		"user":   username,
-		"remote": r.RemoteAddr,
-		"method": r.Method,
-		"url":    r.URL,
-		"err":    err.Error(),
-	}).Error("User rejected by GUI")
+	logging.LogAudit(config_obj, username, "User rejected by GUI",
+		logrus.Fields{
+			"remote": r.RemoteAddr,
+			"method": r.Method,
+			"url":    r.URL.String(),
+			"err":    err.Error(),
+		})
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusUnauthorized)
+	w.WriteHeader(http.StatusOK)
 
 	renderRejectionMessage(config_obj,
 		w, username, []velociraptor.AuthenticatorInfo{

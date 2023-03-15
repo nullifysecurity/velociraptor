@@ -29,7 +29,7 @@ import (
 	"www.velocidex.com/golang/velociraptor/services"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/velociraptor/vql/acl_managers"
-	"www.velocidex.com/golang/velociraptor/vql/tools"
+	"www.velocidex.com/golang/velociraptor/vql/tools/collector"
 	"www.velocidex.com/golang/vfilter"
 	"www.velocidex.com/golang/vfilter/arg_parser"
 )
@@ -148,7 +148,7 @@ func (self *ScheduleCollectionFunction) Call(ctx context.Context,
 		arg.Spec = spec
 	}
 
-	err = tools.AddSpecProtobuf(config_obj, repository, scope,
+	err = collector.AddSpecProtobuf(ctx, config_obj, repository, scope,
 		arg.Spec, request)
 	if err != nil {
 		scope.Log("collect_client: %v", err)
@@ -172,7 +172,7 @@ func (self *ScheduleCollectionFunction) Call(ctx context.Context,
 			// Notify the client about it.
 			notifier, err := services.GetNotifier(config_obj)
 			if err == nil {
-				notifier.NotifyListener(
+				notifier.NotifyListener(ctx,
 					config_obj, arg.ClientId, "collect_client")
 			}
 		})

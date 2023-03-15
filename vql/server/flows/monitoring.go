@@ -1,5 +1,3 @@
-// +build server_vql
-
 /*
    Velociraptor - Dig Deeper
    Copyright (C) 2019-2022 Rapid7 Inc.
@@ -78,7 +76,7 @@ func (self MonitoringPlugin) Call(
 			arg.Source = ""
 		}
 
-		path_manager, err := artifact_paths.NewArtifactPathManager(
+		path_manager, err := artifact_paths.NewArtifactPathManager(ctx,
 			config_obj, arg.ClientId, arg.FlowId, arg.Artifact)
 		if err != nil {
 			scope.Log("monitoring: %v", err)
@@ -185,7 +183,7 @@ func (self WatchMonitoringPlugin) Call(
 			return
 		}
 
-		mode, err := artifact_paths.GetArtifactMode(
+		mode, err := artifact_paths.GetArtifactMode(ctx,
 			config_obj, arg.Artifact)
 		if err != nil {
 			scope.Log("Artifact %s not known", arg.Artifact)

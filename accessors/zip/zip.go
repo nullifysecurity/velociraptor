@@ -40,6 +40,7 @@
 package zip
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -52,9 +53,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"www.velocidex.com/golang/velociraptor/accessors"
+	"www.velocidex.com/golang/velociraptor/constants"
 	"www.velocidex.com/golang/velociraptor/json"
 	"www.velocidex.com/golang/velociraptor/third_party/zip"
 	"www.velocidex.com/golang/velociraptor/utils"
+	"www.velocidex.com/golang/vfilter"
+	"www.velocidex.com/golang/vfilter/types"
 )
 
 var (
@@ -259,6 +263,37 @@ type ZipFileCache struct {
 	last_active time.Time
 
 	id uint64
+
+	scope vfilter.Scope
+}
+
+func (self *ZipFileCache) maybeGetPassword() string {
+	password_any, pres := self.scope.Resolve(constants.ZIP_PASSWORDS)
+	if pres {
+		switch t := password_any.(type) {
+		case types.StoredExpression:
+			password_any = t.Reduce(context.TODO(), self.scope)
+
+		case types.LazyExpr:
+			password_any = t.ReduceWithScope(
+				context.TODO(), self.scope)
+		}
+
+		password, ok := password_any.(string)
+		if ok {
+			return password
+		}
+
+	}
+	// If not in scope, check context
+	password_any, ok := self.scope.GetContext(constants.ZIP_PASSWORDS)
+	if ok {
+		password, ok := password_any.(string)
+		if ok {
+			return password
+		}
+	}
+	return ""
 }
 
 // Open a file within the cache. Find a direct reference to the
@@ -278,6 +313,14 @@ func (self *ZipFileCache) Open(full_path *accessors.OSPath) (
 	}
 
 	fd, err := info.member_file.Open()
+	if err == zip.ErrPassword {
+		password := self.maybeGetPassword()
+		if password != "" {
+			info.member_file.SetPassword(password)
+			fd, err = info.member_file.Open()
+		}
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("While reading %v %s: %w",
 			utils.DebugString(info.member_file),
@@ -331,7 +374,7 @@ loop:
 		}, nil
 	}
 
-	return nil, errors.New("Not found.")
+	return nil, fmt.Errorf("Zip: Not found: %v.", full_path.String())
 }
 
 func (self *ZipFileCache) GetChildren(

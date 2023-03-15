@@ -35,6 +35,7 @@ type Listener struct {
 
 type QueuePool struct {
 	mu sync.Mutex
+	id uint64
 
 	config_obj *config_proto.Config
 
@@ -141,8 +142,9 @@ func (self *QueuePool) BroadcastJsonl(vfs_path string, jsonl []byte) {
 }
 
 func (self *QueuePool) Broadcast(vfs_path string, row *ordereddict.Dict) {
+	registrations := self.getRegistrations(vfs_path)
 	// Ensure we do not hold the lock for very long here.
-	for _, item := range self.getRegistrations(vfs_path) {
+	for _, item := range registrations {
 		select {
 		case item.Channel <- row:
 		case <-time.After(2 * time.Second):
@@ -156,6 +158,7 @@ func (self *QueuePool) Broadcast(vfs_path string, row *ordereddict.Dict) {
 
 func NewQueuePool(config_obj *config_proto.Config) *QueuePool {
 	return &QueuePool{
+		id:            utils.GetId(),
 		config_obj:    config_obj,
 		registrations: make(map[string][]*Listener),
 	}
@@ -166,6 +169,10 @@ type MemoryQueueManager struct {
 	pool       *QueuePool
 	config_obj *config_proto.Config
 	Clock      utils.Clock
+}
+
+func (self *MemoryQueueManager) SetClock(clock utils.Clock) {
+	self.Clock = clock
 }
 
 func (self *MemoryQueueManager) Debug() {
@@ -185,18 +192,19 @@ func (self *MemoryQueueManager) Broadcast(
 }
 
 func (self *MemoryQueueManager) PushEventJsonl(
-	path_manager api.PathManager, jsonl []byte) error {
+	path_manager api.PathManager, jsonl []byte, row_count int) error {
 
 	// Writes are asyncronous
 	rs_writer, err := result_sets.NewTimedResultSetWriter(
-		self.FileStore, path_manager, nil, nil)
+		self.FileStore, path_manager, json.DefaultEncOpts(),
+		utils.BackgroundWriter)
 	if err != nil {
 		return err
 	}
 	defer rs_writer.Close()
 
 	jsonl = json.AppendJsonlItem(jsonl, "_ts", int(self.Clock.Now().Unix()))
-	rs_writer.WriteJSONL(jsonl, 0)
+	rs_writer.WriteJSONL(jsonl, row_count)
 
 	self.pool.BroadcastJsonl(path_manager.GetQueueName(), jsonl)
 	return nil

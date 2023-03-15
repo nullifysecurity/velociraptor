@@ -37,7 +37,7 @@ func toolUploadHandler() http.Handler {
 		// Check for acls
 		userinfo := GetUserInfo(r.Context(), org_config_obj)
 		permissions := acls.ARTIFACT_WRITER
-		perm, err := acls.CheckAccess(org_config_obj, userinfo.Name, permissions)
+		perm, err := services.CheckAccess(org_config_obj, userinfo.Name, permissions)
 		if !perm || err != nil {
 			returnError(w, http.StatusUnauthorized,
 				"User is not allowed to upload tools.")
@@ -46,7 +46,7 @@ func toolUploadHandler() http.Handler {
 
 		// Parse our multipart form, 10 << 20 specifies a maximum
 		// upload of 10 MB files.
-		err = r.ParseMultipartForm(10 << 20)
+		err = r.ParseMultipartForm(10 << 25)
 		if err != nil {
 			returnError(w, http.StatusBadRequest, "Unsupported params")
 			return
@@ -125,7 +125,8 @@ func toolUploadHandler() http.Handler {
 			return
 		}
 
-		err = inventory.AddTool(org_config_obj, tool,
+		ctx := r.Context()
+		err = inventory.AddTool(ctx, org_config_obj, tool,
 			services.ToolOptions{
 				AdminOverride: true,
 			})
@@ -171,7 +172,7 @@ func formUploadHandler() http.Handler {
 		// Check for acls
 		userinfo := GetUserInfo(r.Context(), org_config_obj)
 		permissions := acls.COLLECT_CLIENT
-		perm, err := acls.CheckAccess(org_config_obj, userinfo.Name, permissions)
+		perm, err := services.CheckAccess(org_config_obj, userinfo.Name, permissions)
 		if !perm || err != nil {
 			returnError(w, http.StatusUnauthorized,
 				"User is not allowed to upload files for forms.")

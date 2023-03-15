@@ -1,10 +1,12 @@
 package accessors
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/Velocidex/ordereddict"
-	errors "github.com/pkg/errors"
+	errors "github.com/go-errors/errors"
+
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/constants"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
@@ -73,8 +75,6 @@ type DefaultDeviceManager struct {
 	mu           sync.Mutex
 	handlers     map[string]FileSystemAccessor
 	descriptions *ordereddict.Dict
-
-	org string
 }
 
 func NewDefaultDeviceManager() *DefaultDeviceManager {
@@ -137,7 +137,6 @@ func (self *DefaultDeviceManager) copy() *DefaultDeviceManager {
 
 	result.descriptions = ordereddict.NewDict()
 	result.descriptions.MergeFrom(self.descriptions)
-	result.org = self.org
 	return result
 }
 
@@ -148,4 +147,27 @@ func Register(
 
 func DescribeAccessors() *ordereddict.Dict {
 	return globalDeviceManager.DescribeAccessors()
+}
+
+func EnforceAccessorAllowList(allowed_accessors []string) error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	global_manager := globalDeviceManager
+	globalDeviceManager = NewDefaultDeviceManager()
+
+	for _, allowed := range allowed_accessors {
+		impl, ok := global_manager.handlers[allowed]
+		if !ok {
+			return fmt.Errorf("Unknown accessor in allow list: %v", allowed)
+		}
+
+		globalDeviceManager.handlers[allowed] = impl
+		desc, pres := global_manager.descriptions.Get(allowed)
+		if pres {
+			globalDeviceManager.descriptions.Set(allowed, desc)
+		}
+	}
+
+	return nil
 }

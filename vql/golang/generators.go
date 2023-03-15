@@ -20,7 +20,6 @@ type Generator struct {
 
 // Give Generator the vfilter.StoredQuery interface so it can return
 // events.
-
 func (self Generator) Eval(ctx context.Context, scope types.Scope) <-chan types.Row {
 	result := make(chan vfilter.Row)
 
@@ -68,6 +67,7 @@ type GeneratorArgs struct {
 	Query             types.StoredQuery `vfilter:"optional,field=query,doc=Run this query to generator rows."`
 	Delay             int64             `vfilter:"optional,field=delay,doc=Wait before starting the query"`
 	WithFileBuffering bool              `vfilter:"optional,field=with_file_buffer,doc=Enable file buffering"`
+	FanOut            int64             `vfilter:"optional,field=fan_out,doc=Wait for this many listeners to connect before starting the query"`
 }
 
 type GeneratorFunction struct{}
@@ -89,7 +89,7 @@ func (self *GeneratorFunction) Call(ctx context.Context,
 	}
 
 	if arg.Name == "" {
-		arg.Name = types.ToString(arg.Query, scope)
+		arg.Name = types.ToString(ctx, scope, arg.Query)
 	}
 
 	b, err := services.GetBroadcastService(config_obj)
@@ -111,13 +111,12 @@ func (self *GeneratorFunction) Call(ctx context.Context,
 		}
 	}
 
-	scope.Log("generate: registered new query for %v: %v",
-		arg.Name, types.ToString(arg.Query, scope))
+	scope.Log("generate: registered new query for %v", arg.Name)
 
 	sub_ctx, cancel := context.WithCancel(ctx)
 
 	// Remove the generator when the scope destroys.
-	scope.AddDestructor(func() {
+	vql_subsystem.GetRootScope(scope).AddDestructor(func() {
 		scope.Log("generate: Removing generator %v", arg.Name)
 		cancel()
 	})
@@ -134,11 +133,16 @@ func (self *GeneratorFunction) Call(ctx context.Context,
 			}
 		}
 
+		if arg.FanOut > 0 {
+			b.WaitForListeners(sub_ctx, arg.Name, arg.FanOut)
+		}
+
 		for item := range arg.Query.Eval(sub_ctx, scope) {
+			materialized := vfilter.MaterializedLazyRow(ctx, item, scope)
 			select {
 			case <-sub_ctx.Done():
 				return
-			case generator_chan <- vfilter.MaterializedLazyRow(ctx, item, scope):
+			case generator_chan <- materialized:
 			}
 		}
 	}()
@@ -154,6 +158,7 @@ func (self GeneratorFunction) Info(scope vfilter.Scope, type_map *vfilter.TypeMa
 		Name:    "generate",
 		Doc:     "Create a named generator that receives rows from the query.",
 		ArgType: type_map.AddType(scope, &GeneratorArgs{}),
+		Version: 2,
 	}
 }
 

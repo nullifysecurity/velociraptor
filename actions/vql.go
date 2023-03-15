@@ -25,7 +25,6 @@ import (
 	"os"
 	"runtime"
 	"runtime/debug"
-	"strings"
 	"time"
 
 	"github.com/Velocidex/ordereddict"
@@ -45,12 +44,13 @@ import (
 
 type LogWriter struct {
 	config_obj *config_proto.Config
-	responder  *responder.Responder
+	responder  responder.Responder
 	ctx        context.Context
 }
 
 func (self *LogWriter) Write(b []byte) (int, error) {
 	level, msg := logging.SplitIntoLevelAndLog(b)
+
 	self.responder.Log(self.ctx, level, msg)
 	logging.GetLogger(self.config_obj, &logging.ClientComponent).
 		LogWithLevel(level, "%v", msg)
@@ -62,7 +62,7 @@ type VQLClientAction struct{}
 func (self VQLClientAction) StartQuery(
 	config_obj *config_proto.Config,
 	ctx context.Context,
-	responder *responder.Responder,
+	responder responder.Responder,
 	arg *actions_proto.VQLCollectorArgs) {
 
 	// Just ignore requests that are too old.
@@ -84,6 +84,11 @@ func (self VQLClientAction) StartQuery(
 	max_row := arg.MaxRow
 	if max_row == 0 {
 		max_row = 10000
+	}
+
+	max_row_buffer_size := arg.MaxRowBufferSize
+	if max_row_buffer_size == 0 {
+		max_row_buffer_size = 5 * 1024 * 1024
 	}
 
 	rate := arg.OpsPerSecond
@@ -110,6 +115,8 @@ func (self VQLClientAction) StartQuery(
 		responder.RaiseError(ctx, "Query should be specified.")
 		return
 	}
+
+	name := GetQueryName(arg.Query)
 
 	// Clients do not have a copy of artifacts so they need to be
 	// sent all artifacts from the server.
@@ -143,7 +150,9 @@ func (self VQLClientAction) StartQuery(
 		ClientConfig: config_obj.Client,
 		// Disable ACLs on the client.
 		ACLManager: acl_managers.NullACLManager{},
-		Env:        ordereddict.NewDict(),
+		Env: ordereddict.NewDict().
+			// Make the session id available in the query.
+			Set("_SessionId", responder.FlowContext().SessionId()),
 		Uploader:   uploader,
 		Repository: repository,
 		Logger:     log.New(&LogWriter{config_obj, responder, ctx}, "", 0),
@@ -156,6 +165,10 @@ func (self VQLClientAction) StartQuery(
 	scope := manager.BuildScope(builder)
 	defer scope.Close()
 
+	// Allow VQL to gain access to the flow responder for low level
+	// functionality.
+	scope.SetContext("_Responder", responder)
+
 	if runtime.GOARCH == "386" &&
 		os.Getenv("PROCESSOR_ARCHITEW6432") == "AMD64" {
 		scope.Log("You are running a 32 bit built binary on Windows x64. " +
@@ -163,10 +176,18 @@ func (self VQLClientAction) StartQuery(
 			"incorrect or missed results or even crashes.")
 	}
 
-	scope.Log("INFO:Starting query execution.")
+	scope.Log("INFO:Starting query execution for %v.", name)
 
-	scope.SetThrottler(NewThrottler(ctx, scope, float64(rate),
-		float64(cpu_limit), float64(iops_limit)))
+	throttler := NewThrottler(ctx, scope, float64(rate),
+		float64(cpu_limit), float64(iops_limit))
+
+	if arg.ProgressTimeout > 0 {
+		duration := time.Duration(arg.ProgressTimeout) * time.Second
+		throttler = NewProgressThrottler(
+			sub_ctx, scope, cancel, throttler, duration)
+		scope.Log("query: Installing a progress alarm for %v", duration)
+	}
+	scope.SetThrottler(throttler)
 
 	start := time.Now()
 
@@ -180,23 +201,24 @@ func (self VQLClientAction) StartQuery(
 			responder.RaiseError(ctx, msg)
 		}
 
-		scope.Log("INFO:Collection is done after %v", time.Since(start))
+		scope.Log("INFO:Collection %v is done after %v", name, time.Since(start))
 	}()
 
 	ok, err := CheckPreconditions(ctx, scope, arg)
 	if err != nil {
-		scope.Log("While evaluating preconditions: %v", err)
-		responder.RaiseError(ctx, fmt.Sprintf("While evaluating preconditions: %v", err))
+		scope.Log("%v: While evaluating preconditions: %v", name, err)
+		responder.RaiseError(ctx,
+			fmt.Sprintf("While evaluating preconditions: %v", err))
 		return
 	}
 
 	if !ok {
-		scope.Log("Skipping query due to preconditions")
+		scope.Log("INFO:%v: Skipping query due to preconditions", name)
 		responder.Return(ctx)
 		return
 	}
 
-	start_row := 0
+	row_tracker := NewQueryTracker()
 
 	// All the queries will use the same scope. This allows one
 	// query to define functions for the next query in order.
@@ -213,8 +235,7 @@ func (self VQLClientAction) StartQuery(
 
 		result_chan := EncodeIntoResponsePackets(
 			vql, sub_ctx, scope,
-			int(max_row),
-			int(max_wait))
+			int(max_row), int(max_wait), int(max_row_buffer_size))
 	run_query:
 		for {
 			select {
@@ -239,45 +260,49 @@ func (self VQLClientAction) StartQuery(
 
 			case <-time.After(time.Second * time.Duration(heartbeat)):
 				responder.Log(ctx, logging.DEFAULT,
-					"Time %v: %s: Waiting for rows.",
-					(uint64(time.Now().UTC().UnixNano()/1000)-
-						query_start)/1000000, query.Name)
+					fmt.Sprintf("%v: Time %v: %s: Waiting for rows.", name,
+						(uint64(time.Now().UTC().UnixNano()/1000)-
+							query_start)/1000000, query.Name))
 
 			case result, ok := <-result_chan:
 				if !ok {
 					query_log.Close()
 					break run_query
 				}
-				// Skip let queries since they never produce results.
-				if strings.HasPrefix(strings.ToLower(query.VQL), "let") {
-					continue
-				}
+
 				response := &actions_proto.VQLResponse{
 					Query:         query,
 					QueryId:       uint64(query_idx),
 					Part:          uint64(result.Part),
 					JSONLResponse: string(result.Payload),
 					TotalRows:     uint64(result.TotalRows),
-					QueryStartRow: uint64(start_row),
+					QueryStartRow: row_tracker.GetStartRow(query),
 					Timestamp:     uint64(time.Now().UTC().UnixNano() / 1000),
 				}
 
-				start_row += result.TotalRows
+				// Do not send empty responses
+				if result.TotalRows == 0 {
+					continue
+				}
+
+				row_tracker.AddRows(query, uint64(result.TotalRows))
 
 				// Don't log empty VQL statements.
 				if query.Name != "" {
 					responder.Log(ctx,
 						logging.DEFAULT,
-						"Time %v: %s: Sending response part %d %s (%d rows).",
-						(response.Timestamp-query_start)/1000000,
-						query.Name,
-						result.Part,
-						humanize.Bytes(uint64(len(result.Payload))),
-						result.TotalRows,
-					)
+						fmt.Sprintf(
+							"%v: Time %v: %s: Sending response part %d %s (%d rows).",
+							name,
+							(response.Timestamp-query_start)/1000000,
+							query.Name,
+							result.Part,
+							humanize.Bytes(uint64(len(result.Payload))),
+							result.TotalRows,
+						))
 				}
 				response.Columns = result.Columns
-				responder.AddResponse(ctx, &crypto_proto.VeloMessage{
+				responder.AddResponse(&crypto_proto.VeloMessage{
 					VQLResponse: response})
 			}
 		}
@@ -285,7 +310,7 @@ func (self VQLClientAction) StartQuery(
 
 	if uploader.Count > 0 {
 		responder.Log(ctx, logging.DEFAULT,
-			"Uploaded %v files.", uploader.Count)
+			fmt.Sprintf("%v: Uploaded %v files.", name, uploader.Count))
 	}
 
 	responder.Return(ctx)
@@ -320,7 +345,9 @@ func EncodeIntoResponsePackets(
 	scope types.Scope,
 	maxrows int,
 	// Max time to wait before returning some results.
-	max_wait int) <-chan *vfilter.VFilterJsonResult {
+	max_wait int,
+	// How large do we allow the payload to get
+	max_row_buffer_size int) <-chan *vfilter.VFilterJsonResult {
 	result_chan := make(chan *vfilter.VFilterJsonResult)
 
 	encoder := vql_subsystem.MarshalJsonl(scope)
@@ -353,9 +380,8 @@ func EncodeIntoResponsePackets(
 		}
 		// Send the last payload outstanding.
 		defer ship_payload()
-		deadline := time.After(time.Duration(max_wait) * time.Second)
-
 		for {
+			deadline := time.After(time.Duration(max_wait) * time.Second)
 
 			select {
 			case <-ctx.Done():
@@ -395,7 +421,8 @@ func EncodeIntoResponsePackets(
 				buffer.Write(s)
 
 				// Send the payload if it is too full.
-				if total_rows >= maxrows {
+				if total_rows >= maxrows ||
+					buffer.Len() > max_row_buffer_size {
 					ship_payload()
 					deadline = time.After(time.Duration(max_wait) *
 						time.Second)

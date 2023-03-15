@@ -66,7 +66,7 @@ sources:
 name: WaitForCancel
 type: SERVER_EVENT
 sources:
-- query: SELECT * FROM register_run_count() WHERE log(message="Finished!")
+- query: SELECT * FROM register_run_count() WHERE log(message="Finished!", dedup=-1)
 `}
 )
 
@@ -76,7 +76,7 @@ type ServerMonitoringTestSuite struct {
 
 func (self *ServerMonitoringTestSuite) SetupTest() {
 	self.ConfigObj = self.TestSuite.LoadConfig()
-	self.ConfigObj.Frontend.ServerServices.MonitoringService = true
+	self.ConfigObj.Services.MonitoringService = true
 
 	self.LoadArtifacts(monitoringArtifacts)
 	self.TestSuite.SetupTest()
@@ -183,7 +183,7 @@ func (self *ServerMonitoringTestSuite) TestEmptyTable() {
 name: Sleep
 sources:
 - query: SELECT sleep(time=1000) FROM scope()
-`, true /* validate */, true)
+`, services.ValidateArtifact, services.ArtifactIsBuiltIn)
 	assert.NoError(self.T(), err)
 
 	// Install a table with a sleep artifact.
@@ -298,7 +298,7 @@ sources:
 - query: |
    SELECT copy(accessor='data', filename='hello', dest=Filename)
    FROM scope()
-`, true /* validate */, false /* built in */)
+`, services.ValidateArtifact, !services.ArtifactIsBuiltIn)
 	assert.NoError(self.T(), err)
 
 	// Install a table with an initial artifact
@@ -327,7 +327,9 @@ sources:
 
 	// Now we update the artifact definition and the monitoring table
 	// should magically be updated and the new artifact run instead.
-	_, err = manager.SetArtifactFile(self.ConfigObj, "user", `
+	ctx := self.Ctx
+	_, err = manager.SetArtifactFile(
+		ctx, self.ConfigObj, "user", `
 name: TestArtifact
 type: SERVER_EVENT
 parameters:

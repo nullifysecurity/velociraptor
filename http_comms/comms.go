@@ -35,16 +35,17 @@ import (
 	"sync/atomic"
 	"time"
 
-	errors "github.com/pkg/errors"
+	"github.com/go-errors/errors"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/time/rate"
 	"google.golang.org/protobuf/proto"
-	"www.velocidex.com/golang/velociraptor/actions"
 	actions_proto "www.velocidex.com/golang/velociraptor/actions/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/constants"
 	"www.velocidex.com/golang/velociraptor/crypto"
 	crypto_proto "www.velocidex.com/golang/velociraptor/crypto/proto"
 	"www.velocidex.com/golang/velociraptor/executor"
+	"www.velocidex.com/golang/velociraptor/json"
 	"www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/utils"
 )
@@ -80,10 +81,12 @@ type Enroller struct {
 // makes sense to delay this. Velociraptor's enrollments are very
 // cheap so perhaps we dont need to worry about it here?
 func (self *Enroller) MaybeEnrol() {
+	next_enrollment := self.last_enrollment_time.Add(1 * time.Minute)
+	now := self.clock.Now()
+
 	// Only send an enrolment request at most every minute so as
 	// not to overwhelm the server if it can not keep up.
-	if self.clock.Now().After(
-		self.last_enrollment_time.Add(1 * time.Minute)) {
+	if now.After(next_enrollment) {
 		csr_pem, err := self.manager.GetCSR()
 		if err != nil {
 			return
@@ -102,6 +105,9 @@ func (self *Enroller) MaybeEnrol() {
 			// immediately and not queued client side.
 			Urgent: true,
 		})
+	} else {
+		self.logger.Debug("Waiting for enrollment for %v",
+			now.Sub(next_enrollment))
 	}
 }
 
@@ -170,8 +176,15 @@ func NewHTTPConnector(
 		maxPollDev = 30
 	}
 
-	CA_Pool := x509.NewCertPool()
-	err := crypto.AddDefaultCerts(config_obj.Client, CA_Pool)
+	// Try to get the OS cert pool, failing that use a new one. We
+	// already contain a list of valid root certs but using the OS
+	// cert store allows us to support MITM proxies already on the
+	// system. https://github.com/Velocidex/velociraptor/issues/2330
+	CA_Pool, err := x509.SystemCertPool()
+	if err != nil {
+		CA_Pool = x509.NewCertPool()
+	}
+	err = crypto.AddDefaultCerts(config_obj.Client, CA_Pool)
 	if err != nil {
 		return nil, err
 	}
@@ -204,6 +217,20 @@ func NewHTTPConnector(
 		timeout = 300 // 5 Min default
 	}
 
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = tls_config
+	transport.DialContext = (&net.Dialer{
+		Timeout:   time.Duration(timeout) * time.Second,
+		KeepAlive: time.Duration(timeout) * time.Second,
+		DualStack: true,
+	}).DialContext
+	transport.Proxy = proxyHandler
+	transport.MaxIdleConns = 100
+	transport.IdleConnTimeout = time.Duration(timeout) * time.Second
+	transport.TLSHandshakeTimeout = time.Duration(timeout) * time.Second
+	transport.ExpectContinueTimeout = time.Duration(timeout) * time.Second
+	transport.ResponseHeaderTimeout = time.Duration(timeout) * time.Second
+
 	self := &HTTPConnector{
 		config_obj: config_obj,
 		manager:    manager,
@@ -226,20 +253,7 @@ func NewHTTPConnector(
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
-			Transport: &http.Transport{
-				DialContext: (&net.Dialer{
-					Timeout:   time.Duration(timeout) * time.Second,
-					KeepAlive: time.Duration(timeout) * time.Second,
-					DualStack: true,
-				}).DialContext,
-				Proxy:                 proxyHandler,
-				MaxIdleConns:          100,
-				IdleConnTimeout:       time.Duration(timeout) * time.Second,
-				TLSHandshakeTimeout:   time.Duration(timeout) * time.Second,
-				ExpectContinueTimeout: time.Duration(timeout) * time.Second,
-				ResponseHeaderTimeout: time.Duration(timeout) * time.Second,
-				TLSClientConfig:       tls_config,
-			},
+			Transport: transport,
 		},
 	}
 
@@ -270,7 +284,7 @@ func (self *HTTPConnector) Post(
 		self.logger.Info("Post to %v returned %v - advancing to next server\n",
 			self.GetCurrentUrl(handler), err)
 		self.advanceToNextServer(ctx)
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, 0)
 	}
 
 	trace := &httptrace.ClientTrace{
@@ -291,6 +305,7 @@ func (self *HTTPConnector) Post(
 		req.Header.Set("X-Priority", "urgent")
 	}
 
+	now := utils.GetTime().Now()
 	resp, err := self.client.Do(req)
 	if err != nil && err != io.EOF {
 		self.logger.Info("Post to %v returned %v - advancing to next server\n",
@@ -298,13 +313,13 @@ func (self *HTTPConnector) Post(
 
 		// POST error - rotate to next URL
 		self.advanceToNextServer(ctx)
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, 0)
 	}
 	// Must make sure to close the body or we leak sockets.
 	defer resp.Body.Close()
 
-	self.logger.Info("%s: sent %d bytes, response with status: %v",
-		name, len(data), resp.Status)
+	self.logger.Info("%s: sent %d bytes, response with status: %v after %v, waiting for server messages",
+		name, len(data), resp.Status, utils.GetTime().Now().Sub(now))
 
 	// Handle redirect. Frontends may redirect us to other
 	// frontends.
@@ -376,10 +391,11 @@ func (self *HTTPConnector) Post(
 		// ioutil.ReadAll()
 		n, err := utils.Copy(ctx, encrypted, resp.Body)
 		if err != nil {
-			return nil, errors.WithStack(err)
+			return nil, errors.Wrap(err, 0)
 		}
 
-		self.logger.Info("%s: received %d bytes", name, n)
+		self.logger.Info("%s: received %d bytes in %v",
+			name, n, utils.GetTime().Now().Sub(now))
 
 		// Remember the last successful index.
 		self.mu.Lock()
@@ -406,7 +422,6 @@ func (self *HTTPConnector) Post(
 // wait once per loop.
 func (self *HTTPConnector) advanceToNextServer(ctx context.Context) {
 	self.mu.Lock()
-	defer self.mu.Unlock()
 
 	// Advance the current URL to the next one in
 	// line. Reset the server name (will be fetched from
@@ -432,6 +447,9 @@ func (self *HTTPConnector) advanceToNextServer(ctx context.Context) {
 			executor.Nanny.UpdateReadFromServer()
 		}
 
+		// Release the lock while we wait.
+		self.mu.Unlock()
+
 		// Add random wait between polls to avoid
 		// synchronization of endpoints.
 		select {
@@ -439,6 +457,9 @@ func (self *HTTPConnector) advanceToNextServer(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		}
+
+	} else {
+		self.mu.Unlock()
 	}
 }
 
@@ -493,7 +514,7 @@ func (self *HTTPConnector) rekeyNextServer(ctx context.Context) error {
 
 	req, err := http.NewRequest("GET", url+"server.pem", nil)
 	if err != nil {
-		return errors.WithStack(err)
+		return errors.Wrap(err, 0)
 	}
 	req.Header.Set("User-Agent", constants.USER_AGENT)
 	req.Header.Set("Content-Type", "application/binary")
@@ -520,7 +541,7 @@ func (self *HTTPConnector) rekeyNextServer(ctx context.Context) error {
 	pem, err := ioutil.ReadAll(io.LimitReader(resp.Body, constants.MAX_MEMORY))
 	if err != nil {
 		self.server_name = ""
-		return errors.WithStack(err)
+		return errors.Wrap(err, 0)
 	}
 
 	// This will replace the current server_name certificate in
@@ -553,13 +574,19 @@ type NotificationReader struct {
 	manager    crypto.ICryptoManager
 	executor   executor.Executor
 	enroller   *Enroller
-	handler    string
-	logger     *logging.LogContext
-	name       string
+
+	// The url of the handler on the server (see server/comms.go)
+	// Currently this is "control" for the Sender and "reader" for the
+	// NotificationReader.
+	handler string
+	logger  *logging.LogContext
+	name    string
 
 	minPoll, maxPoll      time.Duration
 	maxPollDev            uint64
 	current_poll_duration time.Duration
+
+	limiter *rate.Limiter
 
 	// Pause the PumpRingBufferToSendMessage loop - stops transmitting
 	// data to the server temporarily. New data will still be queued
@@ -573,6 +600,14 @@ type NotificationReader struct {
 	on_exit func()
 
 	clock utils.Clock
+
+	// Send the server Server.Internal.ClientInfo messages
+	// periodically. This is sent outside the executor queues to avoid
+	// having the message accumulate in the ring buffer file, but it
+	// looks just like a regular montoring event query result.
+	mu                 sync.Mutex
+	last_update_time   time.Time
+	last_update_period time.Duration
 }
 
 func NewNotificationReader(
@@ -583,6 +618,7 @@ func NewNotificationReader(
 	enroller *Enroller,
 	logger *logging.LogContext,
 	name string,
+	limiter *rate.Limiter,
 	handler string,
 	on_exit func(),
 	clock utils.Clock) *NotificationReader {
@@ -597,6 +633,16 @@ func NewNotificationReader(
 		minPoll = 1
 	}
 
+	last_update_period := 86400 * time.Second
+	if config_obj.Client.ClientInfoUpdateTime > 0 {
+		last_update_period = time.Duration(
+			config_obj.Client.ClientInfoUpdateTime) * time.Second
+
+		// Set to a negative number to disable Server.Internal.ClientInfo
+	} else if config_obj.Client.ClientInfoUpdateTime == -1 {
+		last_update_period = 0
+	}
+
 	return &NotificationReader{
 		config_obj:            config_obj,
 		connector:             connector,
@@ -609,9 +655,11 @@ func NewNotificationReader(
 		minPoll:               time.Duration(minPoll) * time.Second,
 		maxPoll:               time.Duration(config_obj.Client.MaxPoll) * time.Second,
 		maxPollDev:            maxPollDev,
+		limiter:               limiter,
 		current_poll_duration: time.Second,
 		on_exit:               on_exit,
 		clock:                 clock,
+		last_update_period:    last_update_period,
 	}
 }
 
@@ -633,7 +681,7 @@ func (self *NotificationReader) sendMessageList(
 			// If we are being redirected do not wait -
 			// just retry again.
 
-			if errors.Cause(err) == RedirectError {
+			if errors.Is(err, RedirectError) {
 				continue
 			}
 
@@ -680,9 +728,6 @@ func (self *NotificationReader) sendToURL(
 		self.connector.ReKeyNextServer(ctx)
 	}
 
-	self.logger.Info("%s: Connected to %s", self.name,
-		self.connector.GetCurrentUrl(self.handler))
-
 	// Clients always compress messages to the server.
 	cipher_text, err := self.manager.Encrypt(
 		message_list,
@@ -692,6 +737,16 @@ func (self *NotificationReader) sendToURL(
 	if err != nil {
 		return err
 	}
+
+	now := utils.GetTime().Now()
+	if !urgent {
+		self.limiter.Wait(ctx)
+	}
+
+	self.logger.Info(
+		"%s: Connected to %s after waiting for limiter for %v",
+		self.name, self.connector.GetCurrentUrl(self.handler),
+		utils.GetTime().Now().Sub(now))
 
 	encrypted, err := self.connector.Post(ctx, self.name,
 		self.handler, cipher_text, urgent)
@@ -714,8 +769,8 @@ func (self *NotificationReader) sendToURL(
 		return err
 	}
 
-	return message_info.IterateJobs(ctx,
-		func(ctx context.Context, msg *crypto_proto.VeloMessage) {
+	return message_info.IterateJobs(ctx, self.config_obj,
+		func(ctx context.Context, msg *crypto_proto.VeloMessage) error {
 
 			// Abort the client, but leave the client
 			// running a bit to send acks. NOTE: This has
@@ -730,6 +785,7 @@ func (self *NotificationReader) sendToURL(
 			}
 
 			self.executor.ProcessRequest(ctx, msg)
+			return nil
 		})
 }
 
@@ -802,14 +858,45 @@ func (self *NotificationReader) Start(
 // server's last hunt timestamp). It is therefore ok to send a foreman
 // message in every reader message to improve hunt latency.
 func (self *NotificationReader) GetMessageList() *crypto_proto.MessageList {
-	return &crypto_proto.MessageList{
+	self.mu.Lock()
+	defer self.mu.Unlock()
+
+	// Send this every message
+	result := &crypto_proto.MessageList{
 		Job: []*crypto_proto.VeloMessage{{
 			SessionId: constants.FOREMAN_WELL_KNOWN_FLOW,
 			ForemanCheckin: &actions_proto.ForemanCheckin{
-				LastEventTableVersion: actions.GlobalEventTableVersion(),
-			}},
-		},
+				LastEventTableVersion: self.executor.EventManager().Version(),
+			},
+		}}}
+
+	// Attach the Server.Internal.ClientInfo message very
+	// infrequently.
+	now := utils.GetTime().Now()
+	if now.Add(-self.last_update_period).After(self.last_update_time) {
+		self.last_update_time = now
+
+		client_info := self.executor.GetClientInfo()
+		client_info_data, err := json.Marshal(client_info)
+		if err == nil {
+			logger := logging.GetLogger(self.config_obj, &logging.ClientComponent)
+			logger.Debug("Sending client info update %v", client_info)
+
+			client_info_data = append(client_info_data, '\n')
+			result.Job = append(result.Job, &crypto_proto.VeloMessage{
+				SessionId: "F.Monitoring",
+				VQLResponse: &actions_proto.VQLResponse{
+					JSONLResponse: string(client_info_data),
+					Query: &actions_proto.VQLRequest{
+						Name: "Server.Internal.ClientInfo",
+					},
+					TotalRows: 1,
+				},
+			})
+		}
 	}
+
+	return result
 }
 
 type HTTPCommunicator struct {
@@ -828,6 +915,8 @@ type HTTPCommunicator struct {
 
 	// Will be called when we exit the communicator.
 	on_exit func()
+
+	Manager crypto.ICryptoManager
 }
 
 func (self *HTTPCommunicator) SetPause(is_paused bool) {
@@ -843,7 +932,6 @@ func (self *HTTPCommunicator) SetPause(is_paused bool) {
 func (self *HTTPCommunicator) Run(
 	ctx context.Context, wg *sync.WaitGroup) {
 	self.logger.Info("Starting HTTPCommunicator: %v", self.receiver.connector)
-	defer wg.Done()
 
 	self.receiver.Start(ctx, wg)
 	self.sender.Start(ctx, wg)
@@ -854,7 +942,7 @@ func (self *HTTPCommunicator) Run(
 func NewHTTPCommunicator(
 	ctx context.Context,
 	config_obj *config_proto.Config,
-	manager crypto.IClientCryptoManager,
+	crypto_manager crypto.IClientCryptoManager,
 	executor executor.Executor,
 	urls []string,
 	on_exit func(),
@@ -863,17 +951,17 @@ func NewHTTPCommunicator(
 	logger := logging.GetLogger(config_obj, &logging.ClientComponent)
 	enroller := &Enroller{
 		config_obj: config_obj,
-		manager:    manager,
+		manager:    crypto_manager,
 		executor:   executor,
 		logger:     logger,
 		clock:      clock,
 	}
-	connector, err := NewHTTPConnector(config_obj, manager, logger, urls, clock)
+	connector, err := NewHTTPConnector(config_obj, crypto_manager, logger, urls, clock)
 	if err != nil {
 		return nil, err
 	}
 
-	rb := NewLocalBuffer(ctx, config_obj)
+	rb := NewLocalBuffer(ctx, executor.FlowManager(), config_obj)
 
 	// Truncate the file to ensure we always start with a clean
 	// slate. This avoids a situation where the client fills up
@@ -890,29 +978,76 @@ func NewHTTPCommunicator(
 		}
 	}
 
+	// The sender sends messages to the server. We want the sender to
+	// send data as quickly as possible usually. NOTE: The sender only
+	// sends data when there is something to send so we are not too
+	// worried about spin loops.
+	poll_min := 100 * time.Millisecond
+	if config_obj.Client != nil && config_obj.Client.MinPoll > 0 {
+		poll_min = time.Second * time.Duration(config_obj.Client.MinPoll)
+	}
+
+	sender_limiter := rate.NewLimiter(
+		rate.Every(time.Duration(poll_min)), 100)
+
 	sender, err := NewSender(
-		config_obj, connector, manager, executor, rb, enroller,
-		logger, "Sender", "control", child_on_exit, clock)
+		config_obj, connector,
+		crypto_manager, executor, rb, enroller,
+		logger, "Sender", sender_limiter,
+
+		// The handler we hit on the server to send responses.
+		"control", child_on_exit, clock)
 	if err != nil {
 		return nil, err
 	}
+
+	// The receiver receives messages from the server.
+
+	// We want the receiver to not poll too frequently to avoid extra
+	// load on the server. Normally, the client stays connected to the
+	// server so it can be tasked immediately. However sometimes if
+	// the client/server connection is interrupted the client will
+	// attempt to reconnect immediately but will then back off to
+	// ensure it does not go into a reconnect loop. Since receiver
+	// connects happen all the time we are at risk of a reeive loop -
+	// where the client reconnects very frequently. This limiter
+	// avoids this condition by rate limiting the frequency of reader
+	// connections.
+	poll_max := 60 * time.Second
+	if config_obj.Client != nil && config_obj.Client.MaxPoll > 0 {
+		poll_max = time.Second * time.Duration(config_obj.Client.MaxPoll)
+	}
+
+	// In the case of a reconnect loop we do not connect more than
+	// twice every poll max but we are allowed to connect sooner at
+	// first. Note: We set the limit to half the max poll rate because
+	// the client connects at least as frequently as the max poll
+	// rate. We need to set the limit lower to allow the limiter to
+	// gain tokens during normal operation.
+	receiver_limiter := rate.NewLimiter(
+		rate.Every(time.Duration(poll_max/2)), 10)
+
+	receiver := NewNotificationReader(
+		config_obj, connector, crypto_manager, executor, enroller,
+		logger, "Receiver "+executor.ClientId(), receiver_limiter,
+
+		// The handler for receiving messages from the server.
+		"reader", child_on_exit, clock)
 
 	result := &HTTPCommunicator{
 		config_obj: config_obj,
 		logger:     logger,
 		enroller: &Enroller{
 			config_obj: config_obj,
-			manager:    manager,
+			manager:    crypto_manager,
 			executor:   executor,
 			logger:     logger,
 			clock:      clock,
 		},
-		on_exit: on_exit,
-		sender:  sender,
-		receiver: NewNotificationReader(
-			config_obj, connector, manager, executor, enroller,
-			logger, "Receiver "+executor.ClientId(),
-			"reader", child_on_exit, clock),
+		on_exit:  on_exit,
+		sender:   sender,
+		receiver: receiver,
+		Manager:  crypto_manager,
 	}
 
 	return result, nil

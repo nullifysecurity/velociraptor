@@ -78,6 +78,8 @@ type CompilerOptions struct {
 
 	// Ignore Missing Artifacts without raising an error.
 	IgnoreMissingArtifacts bool
+
+	LogBatchTime uint64
 }
 
 type Launcher interface {
@@ -93,7 +95,7 @@ type Launcher interface {
 
 	// Calculates the dependent artifacts
 	GetDependentArtifacts(
-		config_obj *config_proto.Config,
+		ctx context.Context, config_obj *config_proto.Config,
 		repository Repository,
 		names []string) ([]string, error)
 
@@ -157,7 +159,7 @@ type Launcher interface {
 	CancelFlow(
 		ctx context.Context,
 		config_obj *config_proto.Config,
-		client_id, flow_id, username string) (
+		client_id, flow_id, principal string) (
 		res *api_proto.StartFlowResponse, err error)
 
 	// Get the exact requests that were sent for this collection (for
@@ -166,6 +168,11 @@ type Launcher interface {
 		config_obj *config_proto.Config,
 		client_id string, flow_id string,
 		offset uint64, count uint64) (*api_proto.ApiFlowRequestDetails, error)
+
+	WriteFlow(
+		ctx context.Context,
+		config_obj *config_proto.Config,
+		flow *flows_proto.ArtifactCollectorContext) error
 
 	DeleteFlow(
 		ctx context.Context,

@@ -34,6 +34,9 @@ message Version {
             description: "When the client was built."
         }];
 
+    // Populated by reading the writeback file.
+    uint64 install_time = 8;
+
     string ci_build_url = 6;
 
     string compiler = 7;
@@ -41,6 +44,10 @@ message Version {
 
 // The client's state which are persisted in the writeback file.
 message Writeback {
+    // When the client was installed (basically the timestamp of the
+    // writeback file).
+    uint64 install_time = 16;
+
     string private_key = 7 [(sem_type) = {
             description: "The client's private key in PEM encoding."
         }];
@@ -235,6 +242,16 @@ message ClientConfig {
     CryptoConfig Crypto = 33;
 
     bool disable_compression = 37;
+
+    // How often clients inform the server about flow progress
+    // (default 5 seconds).
+    uint64 default_server_flow_stats_update = 39;
+
+    // Clients will send a Server.Internal.ClientInfo message to the
+    // server every this many seconds.This helps to keep the server
+    // info up to date about each client. This should not be sent too
+    // frequently. The default is 1 day (86400 seconds).
+    int64 client_info_update_time = 40;
 }
 
 message APIConfig {
@@ -350,6 +367,10 @@ message Authenticator {
     // MultiAuthenticator delegates to multiple other authenticators.
     repeated Authenticator sub_authenticators = 17;
 
+    string auth_redirect_template = 21 [(sem_type) = {
+            description: "URL to redirect to on Unauthorized API call",
+        }];
+
     // Defaults - no need to change these generally.
 
     // How long to keep the session alive between auth flows - default
@@ -421,7 +442,7 @@ message GUIConfig {
     // packs).
     string artifact_search_filter = 18;
 
-    // SAML info deprecated - will be moved to a sample authenticator.
+    // SAML info deprecated - will be moved to a saml authenticator.
     string saml_certificate = 12;
     string saml_private_key = 13;
     string saml_idp_metadata_url = 14;
@@ -443,7 +464,6 @@ message CAConfig {
             description: "The private key of the CA encoded in PEM. This must correspond with the certificate in Client.ca_certificate."
         }];
 }
-
 
 message ReverseProxyConfig {
     string route = 1;
@@ -485,13 +505,12 @@ message FrontendResourceControl {
     int64 enrollments_per_second = 3;
 
     // The maximum number of concurrent client connections we can
-    // process. The actual concurrency level can be dynamically
-    // adjusted to try to control the target_heap_size below. As the
-    // heap size increases, the frontend will reduce the concurrency
-    // level in order to reduce memory pressure. Low concurrency
-    // levels increase average latency and in the worse case cause
-    // clients to time out. When clients timeout, they will back off
-    // and try to send data later.
+    // process. Concurrency limits helps to ensure the server is not
+    // overloaded serving too many clients at the same time.
+    // Concurrency refers to the actual serving time of a client
+    // (i.e. time taken to read the response and write to the
+    // datastore), not the total number of clients served by
+    // server. Default is number of cores * 2.
     uint64 concurrency = 9;
 
     // Aim for this heap size (default 2Gb). If actual memory usage
@@ -554,6 +573,15 @@ message FrontendResourceControl {
     // size of the file - when it is exceeded, the file will be
     // truncated and events will be lost. Default is 1gb
     int64 max_journal_buffer_size = 28;
+
+    // The maximum time in seconds the client will batch log messages
+    // before forwarding them to the server (default 1 second).
+    uint64 default_log_batch_time = 31;
+
+    // The maximum time in seconds the client will batch minitoring
+    // log messages before forwarding them to the server (default 600
+    // second).
+    uint64 default_monitoring_log_batch_time = 32;
 }
 
 
@@ -649,10 +677,6 @@ message FrontendConfig {
 
     int64 GRPC_pool_max_size = 17;
     int64 GRPC_pool_max_wait = 18;
-
-    // The services that will run on this frontend. If not set, all
-    // services will run on the primary frontend.
-    ServerServicesConfig server_services = 20;
 
     FrontendResourceControl resources = 27;
 
@@ -782,6 +806,8 @@ message MailConfig {
     string auth_password = 5 [(sem_type) = {
             description: "password to authenticate with.",
         }];
+
+    bool skip_verify = 6;
 }
 
 message LoggingRetentionConfig {
@@ -839,6 +865,8 @@ message AutoExecConfig {
 // role. The startup code will update the config object to request the
 // right services, depending on the required role. Services are
 // actually started by the org manager.
+
+// Do not set these in the configuration file - they are used internally.
 message ServerServicesConfig {
    bool hunt_manager = 1;
    bool hunt_dispatcher = 2;
@@ -888,6 +916,46 @@ message Defaults {
     bool event_change_notify_all_clients = 6;
 
     uint64 max_vfs_directory_size = 7;
+
+    repeated string artifact_definitions_directories = 8;
+
+    // The number of rows to keep in memory during a group by
+    // operation. Once this is exceeded we switch to disk mode which
+    // is a lot slower. Default 30000
+    uint64 max_in_memory_group_by = 9;
+
+    // If these are set we enforce VQL to only have the specified
+    // allowed VQL plugins and functions. This is a way to harden the
+    // server by removing potentially sensitive functionality to allow
+    // only approved VQL plugins to run.
+    repeated string allowed_plugins = 10;
+    repeated string allowed_functions = 11;
+    repeated string allowed_accessors = 12;
+
+    // How long to cache ACL policies (default 60 sec)
+    uint64 acl_lru_timeout_sec = 13;
+
+    // Ignore messages from unauthenticated clients for this long -
+    // gives them a chance to enrol first (default 10 sec).
+    int64 unauthenticated_lru_timeout_sec = 14;
+
+    // The Maximum size of a sparse file that can be expanded. Files
+    // larger than this will not be expanded. This protects the server
+    // from expanding potentially Tb worth of sparse files when
+    // requested.
+    uint64 max_sparse_expand_size = 15;
+
+    // Control GUI features
+    bool disable_server_events = 26;
+    string auth_redirect_template = 27;
+    bool disable_quarantine_button = 28;
+    string default_theme = 29;
+
+    // Defaults for client communication limits. Decrease those if
+    // your clients are behind a proxy that only accepts very small
+    // POST messages. If not set we use client defaults.
+    uint64 max_rows = 30;
+    uint64 max_row_buffer_size = 31;
 }
 
 // Configures crypto preferences
@@ -1002,7 +1070,7 @@ message Config {
 
     // The Operating System of the analysis target. Only useful in conjunction
     // with the `device' parameter in case the host's operating system differs
-    // from the operating system used on the device.
+    // from the operating system used on the device. DEPRECATED!
     string analysis_target = 34;
 
     // The list of data sources which Velociraptor should map instead of the
@@ -1015,4 +1083,10 @@ message Config {
     // does not know or use its own org id.
     string org_id = 36;
     string org_name = 37;
+
+
+    // The services that will run at initialization. Note this is not
+    // set in the config file by the user but is propagated from the
+    // startup code.
+    ServerServicesConfig services = 38;
 }

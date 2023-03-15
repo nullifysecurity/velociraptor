@@ -99,8 +99,8 @@ func (self *RepositoryManager) StartWatchingForUpdates(
 					}
 
 					artifact, err := global_repository.LoadYaml(definition,
-						false, /* validate */
-						false /* built_in */)
+						!services.ValidateArtifact,
+						!services.ArtifactIsBuiltIn)
 
 					if err == nil {
 						logger := logging.GetLogger(config_obj, &logging.FrontendComponent)
@@ -134,7 +134,8 @@ func (self *RepositoryManager) SetGlobalRepositoryForTests(
 }
 
 func (self *RepositoryManager) SetArtifactFile(
-	config_obj *config_proto.Config, principal, definition, required_prefix string) (
+	ctx context.Context, config_obj *config_proto.Config,
+	principal, definition, required_prefix string) (
 	*artifacts_proto.Artifact, error) {
 
 	// Use regexes to force the artifact into the correct prefix.
@@ -145,7 +146,7 @@ func (self *RepositoryManager) SetArtifactFile(
 	// Ensure that the artifact is correct by parsing it.
 	tmp_repository := self.NewRepository()
 	artifact_definition, err := tmp_repository.LoadYaml(
-		definition, true /* validate */, false /* built_in */)
+		definition, services.ValidateArtifact, !services.ArtifactIsBuiltIn)
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +167,7 @@ func (self *RepositoryManager) SetArtifactFile(
 
 	// Load the artifact into the currently running repository.
 	artifact, err := global_repository.LoadYaml(
-		definition, true /* validate */, false /* built_in */)
+		definition, services.ValidateArtifact, !services.ArtifactIsBuiltIn)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +202,7 @@ func (self *RepositoryManager) SetArtifactFile(
 		return nil, err
 	}
 
-	err = journal.PushRowsToArtifact(config_obj,
+	err = journal.PushRowsToArtifact(ctx, config_obj,
 		[]*ordereddict.Dict{
 			ordereddict.NewDict().
 				Set("setter", principal).
@@ -220,14 +221,15 @@ func (self *RepositoryManager) SetParent(
 }
 
 func (self *RepositoryManager) DeleteArtifactFile(
-	config_obj *config_proto.Config, principal, name string) error {
+	ctx context.Context, config_obj *config_proto.Config,
+	principal, name string) error {
 	global_repository, err := self.GetGlobalRepository(config_obj)
 	if err != nil {
 		return err
 	}
 
 	// If not there nothing to do...
-	_, pres := global_repository.Get(config_obj, name)
+	_, pres := global_repository.Get(ctx, config_obj, name)
 	if !pres {
 		return nil
 	}
@@ -241,7 +243,7 @@ func (self *RepositoryManager) DeleteArtifactFile(
 		return err
 	}
 
-	err = journal.PushRowsToArtifact(config_obj,
+	err = journal.PushRowsToArtifact(ctx, config_obj,
 		[]*ordereddict.Dict{
 			ordereddict.NewDict().
 				Set("setter", principal).
@@ -358,7 +360,7 @@ func LoadBuiltInArtifacts(ctx context.Context,
 			// Load the built in artifacts as built in. NOTE: Built in
 			// artifacts can not be overwritten!
 			_, err = self.global_repository.LoadYaml(
-				string(data), validate /* Validate */, true /* built_in */)
+				string(data), validate, services.ArtifactIsBuiltIn)
 			if err != nil {
 				logger.Info("Cant parse asset %s: %s", file, err)
 				if validate {
@@ -390,6 +392,7 @@ func LoadBuiltInArtifacts(ctx context.Context,
 	self.wg.Add(1)
 	go func() {
 		defer self.wg.Done()
+
 		names, err := grepository.List(ctx, config_obj)
 		if err != nil {
 			logger.Error("Error: %v", err)
@@ -402,7 +405,7 @@ func LoadBuiltInArtifacts(ctx context.Context,
 				return
 
 			default:
-				_, pres := grepository.Get(config_obj, name)
+				_, pres := grepository.Get(ctx, config_obj, name)
 				if !pres {
 					grepository.Del(name)
 				}

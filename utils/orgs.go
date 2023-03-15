@@ -35,6 +35,11 @@ func OrgIdFromClientId(client_id string) string {
 	return ""
 }
 
+func ClientIdFromSource(client_id string) string {
+	parts := strings.Split(client_id, "-")
+	return parts[0]
+}
+
 func IsRootOrg(org_id string) bool {
 	return org_id == "" || org_id == "root"
 }
@@ -50,4 +55,13 @@ func CompareOrgIds(a, b string) bool {
 		return true
 	}
 	return a == b
+}
+
+func OrgIdInList(org_id string, list []string) bool {
+	for _, i := range list {
+		if CompareOrgIds(org_id, i) {
+			return true
+		}
+	}
+	return false
 }

@@ -22,8 +22,11 @@ import (
 	"regexp"
 )
 
+var (
+	VERSION = "0.6.8-rc3"
+)
+
 const (
-	VERSION                    = "0.6.7-dev"
 	ENROLLMENT_WELL_KNOWN_FLOW = "E:Enrol"
 	MONITORING_WELL_KNOWN_FLOW = FLOW_PREFIX + "Monitoring"
 
@@ -33,7 +36,8 @@ const (
 	ORG_PREFIX              = "O"
 
 	// Well known flows - Request ID:
-	LOG_SINK uint64 = 980
+	LOG_SINK   uint64 = 980
+	STATS_SINK uint64 = 981
 
 	TransferWellKnownFlowId = 5
 	ProcessVQLResponses     = 1
@@ -72,7 +76,10 @@ const (
 	NTFS_CACHE_TIME = "NTFS_CACHE_TIME"
 
 	// Number of clusters to cache in memory (default 100).
-	NTFS_CACHE_SIZE = "NTFS_CACHE_SIZE"
+	NTFS_CACHE_SIZE          = "NTFS_CACHE_SIZE"
+	NTFS_MAX_DIRECTORY_DEPTH = "NTFS_MAX_DIRECTORY_DEPTH"
+	NTFS_MAX_LINKS           = "NTFS_MAX_LINKS"
+	NTFS_INCLUDE_SHORT_NAMES = "NTFS_INCLUDE_SHORT_NAMES"
 
 	RAW_REG_CACHE_SIZE  = "RAW_REG_CACHE_SIZE"
 	BINARY_CACHE_SIZE   = "BINARY_CACHE_SIZE"
@@ -80,10 +87,33 @@ const (
 	USN_FREQUENCY       = "USN_FREQUENCY"
 	ZIP_FILE_CACHE_SIZE = "ZIP_FILE_CACHE_SIZE"
 
+	// VQL tries to balance memory/cpu tradeoffs and also place limits
+	// on memory use. These parameters control this behavior. You can
+	// set them in the VQL environment to influence how the engine
+	// optimizes the queries.
+
+	// Holds this many rows in memory (default 1000) before switching
+	// to disk backing to limit memory use.
+	VQL_MATERIALIZE_ROW_LIMIT = "VQL_MATERIALIZE_ROW_LIMIT"
+
 	// Certain VQL errors represent a failure in artifact
 	// collection. We use this RegExp to determine if log messages
 	// represent failure.
 	VQL_ERROR_REGEX = "(?i)(Error:|Symbol.+?not found|Expecting a path arg type, not)"
+
+	// Set in the scope with one or more passwords
+	ZIP_PASSWORDS = "ZIP_PASSWORDS"
+
+	PinnedServerName = "VelociraptorServer"
+
+	CLIENT_API_VERSION = uint32(4)
+
+	// The newer client communications from version 0.6.8:
+	// * Flow state is maintained on the client.
+	// * Flow state is synced to the server periodically.
+	// * Moves processing requirements from server to the client -
+	//   reducing server load.
+	CLIENT_API_VERSION_0_6_8 = uint32(4)
 )
 
 type key int

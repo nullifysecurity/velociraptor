@@ -16,11 +16,11 @@ func (self *ApiServer) GetToolInfo(ctx context.Context,
 	users := services.GetUserManager()
 	user_record, org_config_obj, err := users.GetUserFromContext(ctx)
 	if err != nil {
-		return nil, err
+		return nil, Status(self.verbose, err)
 	}
 
 	permissions := acls.READ_RESULTS
-	perm, err := acls.CheckAccess(org_config_obj, user_record.Name, permissions)
+	perm, err := services.CheckAccess(org_config_obj, user_record.Name, permissions)
 	if !perm || err != nil {
 		return nil, status.Error(codes.PermissionDenied,
 			"User is not allowed to view tools.")
@@ -28,13 +28,13 @@ func (self *ApiServer) GetToolInfo(ctx context.Context,
 
 	inventory, err := services.GetInventory(org_config_obj)
 	if err != nil {
-		return nil, err
+		return nil, Status(self.verbose, err)
 	}
 	if in.Materialize {
 		return inventory.GetToolInfo(ctx, org_config_obj, in.Name)
 	}
 
-	return inventory.ProbeToolInfo(in.Name)
+	return inventory.ProbeToolInfo(ctx, org_config_obj, in.Name)
 }
 
 func (self *ApiServer) SetToolInfo(ctx context.Context,
@@ -43,14 +43,14 @@ func (self *ApiServer) SetToolInfo(ctx context.Context,
 	users := services.GetUserManager()
 	user_record, org_config_obj, err := users.GetUserFromContext(ctx)
 	if err != nil {
-		return nil, err
+		return nil, Status(self.verbose, err)
 	}
 
 	// Minimum permission required. If the user can write
 	// artifacts they can already autoload tools by uploading an
 	// artifact definition.
 	permissions := acls.ARTIFACT_WRITER
-	perm, err := acls.CheckAccess(org_config_obj, user_record.Name, permissions)
+	perm, err := services.CheckAccess(org_config_obj, user_record.Name, permissions)
 	if !perm || err != nil {
 		return nil, status.Error(codes.PermissionDenied,
 			"User is not allowed to update tool definitions.")
@@ -61,15 +61,15 @@ func (self *ApiServer) SetToolInfo(ctx context.Context,
 
 	inventory, err := services.GetInventory(org_config_obj)
 	if err != nil {
-		return nil, err
+		return nil, Status(self.verbose, err)
 	}
 
-	err = inventory.AddTool(org_config_obj, in,
+	err = inventory.AddTool(ctx, org_config_obj, in,
 		services.ToolOptions{
 			AdminOverride: true,
 		})
 	if err != nil {
-		return nil, err
+		return nil, Status(self.verbose, err)
 	}
 
 	// If materialized we re-fetch the tool and send back the full

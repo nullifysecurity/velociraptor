@@ -21,3 +21,12 @@ div .flow-status-icon {
 .flow-log-filter {
     margin-right: 4px;
 }
+
+.table tr.flow-urgent {
+    font-weight: bold;
+}
+
+.flow-file-download-button {
+    width: 100%;
+    text-align: left;
+}

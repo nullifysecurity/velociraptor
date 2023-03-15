@@ -35,9 +35,9 @@ type TestSuite struct {
 
 func (self *TestSuite) SetupTest() {
 	self.ConfigObj = self.LoadConfig()
-	self.ConfigObj.Frontend.ServerServices.Interrogation = true
-	self.ConfigObj.Frontend.ServerServices.Launcher = true
-	self.ConfigObj.Frontend.ServerServices.UserManager = true
+	self.ConfigObj.Services.Interrogation = true
+	self.ConfigObj.Services.Launcher = true
+	self.ConfigObj.Services.UserManager = true
 
 	var err error
 	self.port, err = vtesting.GetFreePort()
@@ -129,7 +129,11 @@ func (self *TestSuite) makeClient(
 	assert.NoError(self.T(), err)
 
 	client_wg.Add(1)
-	go comm.Run(client_ctx, client_wg)
+	go func() {
+		defer client_wg.Done()
+
+		comm.Run(client_ctx, client_wg)
+	}()
 
 	return comm
 }

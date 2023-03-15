@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/Velocidex/yaml/v2"
-	errors "github.com/pkg/errors"
+	errors "github.com/go-errors/errors"
 	proto "google.golang.org/protobuf/proto"
 	"www.velocidex.com/golang/velociraptor/config"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
@@ -57,7 +57,7 @@ func doGUI() error {
 		// Stop on hard errors but if the file does not exist we need
 		// to create it below..
 		hard_err, ok := err.(config.HardError)
-		if ok && !os.IsNotExist(errors.Cause(hard_err.Err)) {
+		if ok && !errors.Is(hard_err.Err, os.ErrNotExist) {
 			return err
 		}
 
@@ -84,6 +84,7 @@ func doGUI() error {
 		// Frontend only suitable for local client
 		config_obj.Frontend.BindAddress = "127.0.0.1"
 		config_obj.Frontend.BindPort = 8000
+		config_obj.Frontend.DoNotCompressArtifacts = true
 
 		// Client configuration.
 		config_obj.Client.ServerUrls = []string{"https://localhost:8000/"}
@@ -128,7 +129,7 @@ func doGUI() error {
 		}
 
 		// Create a user with default password
-		user_record, err := users.NewUserRecord("admin")
+		user_record, err := users.NewUserRecord(config_obj, "admin")
 		if err != nil {
 			return fmt.Errorf("Unable to create admin user: %w", err)
 		}
@@ -187,11 +188,8 @@ func doGUI() error {
 		fd.Close()
 	}
 
-	if config_obj.Frontend == nil {
-		config_obj.Frontend = &config_proto.FrontendConfig{}
-	}
-	if config_obj.Frontend.ServerServices == nil {
-		config_obj.Frontend.ServerServices = services.AllServerServicesSpec()
+	if config_obj.Services == nil {
+		config_obj.Services = services.AllServerServicesSpec()
 	}
 
 	// Now start the frontend
@@ -226,7 +224,7 @@ func doGUI() error {
 		logger := logging.GetLogger(config_obj, &logging.FrontendComponent)
 		logger.Info("Running client from %v", client_config_path)
 
-		// Include the writeback in the client's configuratio.
+		// Include the writeback in the client's configuration.
 		config_obj, err := makeDefaultConfigLoader().
 			WithRequiredClient().
 			WithRequiredLogging().
@@ -252,7 +250,8 @@ func doGUI() error {
 		org_config_obj, err := org_manager.GetOrgConfig("O123")
 		if err == nil {
 			org_client_config := &config_proto.Config{
-				Client: proto.Clone(org_config_obj.Client).(*config_proto.ClientConfig),
+				Version: proto.Clone(org_config_obj.Version).(*config_proto.Version),
+				Client:  proto.Clone(org_config_obj.Client).(*config_proto.ClientConfig),
 			}
 
 			write_back := filepath.Join(datastore_directory, "Velociraptor.Acme.writeback.yaml")
