@@ -413,9 +413,9 @@ export function sortCaret(order, column) {
     return null;
 }
 
-export function formatColumns(columns, env) {
+export function formatColumns(columns, env, column_formatter) {
     _.each(columns, (x) => {
-        x.headerFormatter=headerFormatter;
+        x.headerFormatter = column_formatter || headerFormatter;
         if (x.sort) {
             x.sortCaret = sortCaret;
         }
@@ -494,6 +494,13 @@ export function formatColumns(columns, env) {
             x.type = null;
             break;
 
+        case "nobreak":
+            x.formatter= (cell, row) => {
+                return <div className="no-break">{cell}</div>;
+            };
+            x.type = null;
+            break;
+
         case "tree":
             x.formatter= (cell, row) => {
                 if (_.isObject(cell)) {
@@ -517,6 +524,18 @@ export function formatColumns(columns, env) {
             };
             x.type = null;
             break;
+
+        case "url_internal":
+            x.formatter = (cell, row) => {
+                if(_.isObject(cell)) {
+                    return <URLViewer internal={true}
+                                      url={cell.url} desc={cell.desc}/>;
+                }
+                return <URLViewer url={cell}/>;
+            };
+            x.type = null;
+            break;
+
 
         case "safe_url":
             x.formatter = (cell, row) => {
@@ -543,6 +562,12 @@ export function formatColumns(columns, env) {
         case "preview_upload":
         case "upload_preview":
             x.formatter = (cell, row) => {
+                if(!env.client_id && row.ClientId) {
+                    env.client_id = row.ClientId;
+                }
+                if(!env.flow_id && row.FlowId) {
+                    env.flow_id = row.FlowId;
+                }
                 return <PreviewUpload
                          env={env}
                          upload={cell}/>;
@@ -560,6 +585,7 @@ export function formatColumns(columns, env) {
 
         case "hex":
             x.formatter = (cell, row) => {
+                if (!cell.substr) return <></>;
                 let bytearray = [];
                 for (let c = 0; c < cell.length; c += 2) {
                     let term = cell.substr(c, 2);

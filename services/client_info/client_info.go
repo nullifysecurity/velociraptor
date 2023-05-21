@@ -38,6 +38,7 @@ package client_info
 import (
 	"context"
 	"errors"
+	"regexp"
 	"sync"
 	"time"
 
@@ -622,6 +623,23 @@ func (self *ClientInfoManager) GetCacheInfoFromCache(
 	return cache_info, nil
 }
 
+var (
+	// Client IDs always start with "C." or they can refer to the "server"
+	client_id_regex              = regexp.MustCompile("^(C\\.[a-z0-9]+|server)")
+	client_id_not_provided_error = errors.New("ClientId not provided")
+	client_id_not_valid_error    = errors.New("ClientId is not valid")
+)
+
+func (self *ClientInfoManager) ValidateClientId(client_id string) error {
+	if client_id == "" {
+		return client_id_not_provided_error
+	}
+	if !client_id_regex.MatchString(client_id) {
+		return client_id_not_valid_error
+	}
+	return nil
+}
+
 // Load the cache info from cache or from storage.
 func (self *ClientInfoManager) GetCacheInfo(client_id string) (*CachedInfo, error) {
 	cached_info, err := self.GetCacheInfoFromCache(client_id)
@@ -677,7 +695,7 @@ func (self *ClientInfoManager) GetCacheInfoFromStorage(
 }
 
 func NewClientInfoManager(config_obj *config_proto.Config) *ClientInfoManager {
-	expected_clients := int64(100)
+	expected_clients := int64(10000)
 	if config_obj.Frontend != nil &&
 		config_obj.Frontend.Resources != nil &&
 		config_obj.Frontend.Resources.ExpectedClients > 0 {
@@ -695,7 +713,9 @@ func NewClientInfoManager(config_obj *config_proto.Config) *ClientInfoManager {
 		mutation_manager: NewMutationManager(),
 	}
 
-	service.lru.SetCacheSizeLimit(int(expected_clients))
+	// The LRU should be large enough to hold all the clients. each
+	// client has several records (client id, hostname, labels etc).
+	service.lru.SetCacheSizeLimit(int(expected_clients) * 10)
 
 	if config_obj.Frontend != nil &&
 		config_obj.Frontend.Resources != nil &&

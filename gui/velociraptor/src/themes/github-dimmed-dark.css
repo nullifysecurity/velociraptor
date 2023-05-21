@@ -725,6 +725,7 @@ body.github-dimmed-dark {
 }
 
 .github-dimmed-dark .report-viewer pre {
+    filter: invert(1);
   background: rgba(255,255,255,.05);
   border-radius: 4px;
   border: none;
@@ -918,11 +919,6 @@ body.github-dimmed-dark {
   color: var(--color-foreground-dimmed);
   font-family: var(--font-family-sans-serif);
   border-top: 1px solid var(--color-btn-border);
-}
-
-/* Spinner */
-.github-dimmed-dark .overlay .fa-spinner {
-  filter: invert(1);
 }
 
 /* Shell input */

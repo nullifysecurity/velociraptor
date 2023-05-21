@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/Velocidex/ordereddict"
+	logging "www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/reporting"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/startup"
@@ -22,6 +23,8 @@ var (
 )
 
 func doCSV() error {
+	logging.DisableLogging()
+
 	config_obj, err := makeDefaultConfigLoader().
 		WithNullLoader().LoadAndValidate()
 	if err != nil {
@@ -31,6 +34,7 @@ func doCSV() error {
 	ctx, cancel := install_sig_handler()
 	defer cancel()
 
+	config_obj.Services = services.GenericToolServices()
 	sm, err := startup.StartToolServices(ctx, config_obj)
 	defer sm.Close()
 

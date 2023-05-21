@@ -10,11 +10,11 @@ import (
 	"www.velocidex.com/golang/velociraptor/accessors"
 	"www.velocidex.com/golang/velociraptor/acls"
 	artifacts_proto "www.velocidex.com/golang/velociraptor/artifacts/proto"
-	"www.velocidex.com/golang/velociraptor/file_store"
 	"www.velocidex.com/golang/velociraptor/json"
 	"www.velocidex.com/golang/velociraptor/paths"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/utils"
+	"www.velocidex.com/golang/velociraptor/vql"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/vfilter"
 	"www.velocidex.com/golang/vfilter/arg_parser"
@@ -26,6 +26,7 @@ type InventoryAddFunctionArgs struct {
 	URL          string `vfilter:"optional,field=url"`
 	Hash         string `vfilter:"optional,field=hash"`
 	Filename     string `vfilter:"optional,field=filename,doc=The name of the file on the endpoint"`
+	Version      string `vfilter:"optional,field=version"`
 
 	File     *accessors.OSPath `vfilter:"optional,field=file,doc=An optional file to upload"`
 	Accessor string            `vfilter:"optional,field=accessor,doc=The accessor to use to read the file."`
@@ -62,6 +63,7 @@ func (self *InventoryAddFunction) Call(ctx context.Context,
 		Url:          arg.URL,
 		Filename:     arg.Filename,
 		Hash:         arg.Hash,
+		Version:      arg.Version,
 	}
 
 	if arg.File != nil {
@@ -78,8 +80,13 @@ func (self *InventoryAddFunction) Call(ctx context.Context,
 		}
 
 		path_manager := paths.NewInventoryPathManager(config_obj, tool)
-		file_store_factory := file_store.GetFileStore(config_obj)
-		writer, err := file_store_factory.WriteFile(path_manager.Path())
+		pathspec, file_store_factory, err := path_manager.Path()
+		if err != nil {
+			scope.Log("inventory_add: %s", err)
+			return vfilter.Null{}
+		}
+
+		writer, err := file_store_factory.WriteFile(pathspec)
 		if err != nil {
 			scope.Log("inventory_add: %s", err)
 			return vfilter.Null{}
@@ -129,14 +136,16 @@ func (self *InventoryAddFunction) Call(ctx context.Context,
 func (self *InventoryAddFunction) Info(
 	scope vfilter.Scope, type_map *vfilter.TypeMap) *vfilter.FunctionInfo {
 	return &vfilter.FunctionInfo{
-		Name:    "inventory_add",
-		Doc:     "Add tool to ThirdParty inventory.",
-		ArgType: type_map.AddType(scope, &InventoryAddFunctionArgs{}),
+		Name:     "inventory_add",
+		Doc:      "Add tool to ThirdParty inventory.",
+		ArgType:  type_map.AddType(scope, &InventoryAddFunctionArgs{}),
+		Metadata: vql.VQLMetadata().Permissions(acls.SERVER_ADMIN).Build(),
 	}
 }
 
 type InventoryGetFunctionArgs struct {
-	Tool string `vfilter:"required,field=tool"`
+	Tool    string `vfilter:"required,field=tool"`
+	Version string `vfilter:"optional,field=version"`
 }
 
 type InventoryGetFunction struct{}
@@ -170,7 +179,7 @@ func (self *InventoryGetFunction) Call(ctx context.Context,
 		return vfilter.Null{}
 	}
 
-	tool, err := inventory.GetToolInfo(ctx, config_obj, arg.Tool)
+	tool, err := inventory.GetToolInfo(ctx, config_obj, arg.Tool, arg.Version)
 	if err != nil {
 		scope.Log("inventory_get: %s", err.Error())
 		return vfilter.Null{}
@@ -192,9 +201,10 @@ func (self *InventoryGetFunction) Call(ctx context.Context,
 func (self *InventoryGetFunction) Info(
 	scope vfilter.Scope, type_map *vfilter.TypeMap) *vfilter.FunctionInfo {
 	return &vfilter.FunctionInfo{
-		Name:    "inventory_get",
-		Doc:     "Get tool info from inventory service.",
-		ArgType: type_map.AddType(scope, &InventoryGetFunctionArgs{}),
+		Name:     "inventory_get",
+		Doc:      "Get tool info from inventory service.",
+		ArgType:  type_map.AddType(scope, &InventoryGetFunctionArgs{}),
+		Metadata: vql.VQLMetadata().Permissions(acls.SERVER_ADMIN).Build(),
 	}
 }
 

@@ -2,8 +2,6 @@ package api
 
 import (
 	context "golang.org/x/net/context"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	"www.velocidex.com/golang/velociraptor/acls"
 	artifacts_proto "www.velocidex.com/golang/velociraptor/artifacts/proto"
@@ -22,7 +20,7 @@ func (self *ApiServer) GetToolInfo(ctx context.Context,
 	permissions := acls.READ_RESULTS
 	perm, err := services.CheckAccess(org_config_obj, user_record.Name, permissions)
 	if !perm || err != nil {
-		return nil, status.Error(codes.PermissionDenied,
+		return nil, PermissionDenied(err,
 			"User is not allowed to view tools.")
 	}
 
@@ -31,10 +29,10 @@ func (self *ApiServer) GetToolInfo(ctx context.Context,
 		return nil, Status(self.verbose, err)
 	}
 	if in.Materialize {
-		return inventory.GetToolInfo(ctx, org_config_obj, in.Name)
+		return inventory.GetToolInfo(ctx, org_config_obj, in.Name, in.Version)
 	}
 
-	return inventory.ProbeToolInfo(ctx, org_config_obj, in.Name)
+	return inventory.ProbeToolInfo(ctx, org_config_obj, in.Name, in.Version)
 }
 
 func (self *ApiServer) SetToolInfo(ctx context.Context,
@@ -52,7 +50,7 @@ func (self *ApiServer) SetToolInfo(ctx context.Context,
 	permissions := acls.ARTIFACT_WRITER
 	perm, err := services.CheckAccess(org_config_obj, user_record.Name, permissions)
 	if !perm || err != nil {
-		return nil, status.Error(codes.PermissionDenied,
+		return nil, PermissionDenied(err,
 			"User is not allowed to update tool definitions.")
 	}
 
@@ -63,6 +61,12 @@ func (self *ApiServer) SetToolInfo(ctx context.Context,
 	if err != nil {
 		return nil, Status(self.verbose, err)
 	}
+
+	// Clear internally managed tools the user should not be allowed
+	// to set.
+	in.Versions = nil
+	in.ServeUrl = ""
+	in.InvalidHash = ""
 
 	err = inventory.AddTool(ctx, org_config_obj, in,
 		services.ToolOptions{
@@ -75,7 +79,7 @@ func (self *ApiServer) SetToolInfo(ctx context.Context,
 	// If materialized we re-fetch the tool and send back the full
 	// record.
 	if materialize {
-		return inventory.GetToolInfo(ctx, org_config_obj, in.Name)
+		return inventory.GetToolInfo(ctx, org_config_obj, in.Name, in.Version)
 	}
 
 	return in, nil

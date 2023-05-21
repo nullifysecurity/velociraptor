@@ -301,9 +301,24 @@ service API {
         };
     }
 
+    rpc VFSDownloadFile(VFSStatDownloadRequest) returns (StartFlowResponse) {
+        option (google.api.http) = {
+            post: "/api/v1/VFSDownloadFile",
+            body: "*",
+        };
+    }
+
     rpc GetTable(GetTableRequest) returns (GetTableResponse) {
         option (google.api.http) = {
             get: "/api/v1/GetTable",
+        };
+    }
+
+    // Facilitate the HexEditor search API
+    rpc SearchFile(SearchFileRequest) returns (SearchFileResponse) {
+        option (google.api.http) = {
+            post: "/api/v1/SearchFile",
+            body: "*",
         };
     }
 
@@ -369,7 +384,7 @@ service API {
         };
     }
 
-    rpc LoadArtifactPack(VFSFileBuffer) returns (LoadArtifactPackResponse) {
+    rpc LoadArtifactPack(LoadArtifactPackRequest) returns (LoadArtifactPackResponse) {
         option (google.api.http) = {
             post: "/api/v1/LoadArtifactPack",
             body: "*",

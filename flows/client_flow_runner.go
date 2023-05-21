@@ -38,6 +38,7 @@ import (
 */
 
 type ClientFlowRunner struct {
+	ctx        context.Context
 	config_obj *config_proto.Config
 
 	// The completer keeps track of all asynchronous filesystem
@@ -47,18 +48,56 @@ type ClientFlowRunner struct {
 	// System.Flow.Completion to attempt to open the collection before
 	// everything is written.
 	completer *utils.Completer
+	closer    func()
+
+	// If the flow is complete we send a completion message to the
+	// master.
+	flow_completion_messages []*ordereddict.Dict
+
+	upload_completion_messages []*ordereddict.Dict
 }
 
-func NewFlowRunner(config_obj *config_proto.Config) *ClientFlowRunner {
+func NewFlowRunner(
+	ctx context.Context,
+	config_obj *config_proto.Config) *ClientFlowRunner {
 	result := &ClientFlowRunner{
+		ctx:        ctx,
 		config_obj: config_obj,
 	}
 
+	// Wait for completion until Close() is called.
 	result.completer = utils.NewCompleter(result.Complete)
+	result.closer = result.completer.GetCompletionFunc()
 	return result
 }
 
-func (self *ClientFlowRunner) Complete() {}
+// Delay sending events to the master node until all commits are
+// complete and data becomes visible.
+func (self *ClientFlowRunner) Complete() {
+	if len(self.flow_completion_messages) > 0 {
+		journal, err := services.GetJournal(self.config_obj)
+		if err != nil {
+			return
+		}
+
+		for _, row := range self.flow_completion_messages {
+			journal.PushRowsToArtifactAsync(self.ctx,
+				self.config_obj, row, "System.Flow.Completion")
+		}
+	}
+
+	if len(self.upload_completion_messages) > 0 {
+		journal, err := services.GetJournal(self.config_obj)
+		if err != nil {
+			return
+		}
+
+		for _, row := range self.upload_completion_messages {
+			journal.PushRowsToArtifactAsync(self.ctx, self.config_obj,
+				row, "System.Upload.Completion")
+		}
+	}
+}
 
 func (self *ClientFlowRunner) ProcessMonitoringMessage(
 	ctx context.Context, msg *crypto_proto.VeloMessage) error {
@@ -113,6 +152,7 @@ func (self *ClientFlowRunner) MonitoringLogMessage(
 	if err != nil {
 		return err
 	}
+	log_path_manager.Clock = utils.GetTime()
 
 	// Write the logs asynchronously
 	file_store_factory := file_store.GetFileStore(self.config_obj)
@@ -129,7 +169,45 @@ func (self *ClientFlowRunner) MonitoringLogMessage(
 
 	rs_writer.WriteJSONL([]byte(payload), int(response.NumberOfRows))
 
+	if response.Level == logging.ALERT {
+		return self.processMonitoringAlert(ctx, client_id, artifact_name, response)
+	}
+
 	return nil
+}
+
+func (self *ClientFlowRunner) processMonitoringAlert(
+	ctx context.Context, client_id, artifact string,
+	msg *crypto_proto.LogMessage) error {
+
+	tmp := &log_message{}
+	err := json.Unmarshal([]byte(msg.Jsonl), tmp)
+	if err != nil {
+		return err
+	}
+
+	alert := &services.AlertMessage{}
+	err = json.Unmarshal([]byte(tmp.Message), alert)
+	if err != nil {
+		return err
+	}
+
+	alert.ClientId = client_id
+	alert.Artifact = artifact
+	alert.ArtifactType = "CLIENT_EVENT"
+
+	serialized, err := json.Marshal(alert)
+	if err != nil {
+		return err
+	}
+	serialized = append(serialized, '\n')
+
+	journal, err := services.GetJournal(self.config_obj)
+	if err != nil {
+		return err
+	}
+	return journal.PushJsonlToArtifact(ctx, self.config_obj,
+		serialized, 1, "Server.Internal.Alerts", "server", "")
 }
 
 func (self *ClientFlowRunner) MonitoringVQLResponse(
@@ -158,9 +236,13 @@ func (self *ClientFlowRunner) MonitoringVQLResponse(
 		return err
 	}
 
+	// Append the client id to the data so we can see where it came
+	// from.
+	data := json.AppendJsonlItem(
+		[]byte(response.JSONLResponse), "ClientId", client_id)
+
 	return journal.PushJsonlToArtifact(ctx,
-		self.config_obj,
-		[]byte(response.JSONLResponse), int(response.TotalRows),
+		self.config_obj, data, int(response.TotalRows),
 		query_name, client_id, flow_id)
 }
 
@@ -181,7 +263,7 @@ func (self *ClientFlowRunner) ProcessSingleMessage(
 	}
 
 	if msg.LogMessage != nil {
-		err := self.LogMessage(client_id, flow_id, msg.LogMessage)
+		err := self.LogMessage(ctx, client_id, flow_id, msg.LogMessage)
 		if err != nil {
 			return fmt.Errorf("LogMessage: %w", err)
 		}
@@ -251,6 +333,32 @@ func (self *ClientFlowRunner) FileBuffer(
 		if err != nil {
 			return err
 		}
+	}
+
+	// Write the actual data to the file.
+	_, err = fd.Write(file_buffer.Data)
+	if err != nil {
+		logger.Error("While writing to %v: %v",
+			file_path_manager.Path().AsClientPath(), err)
+		return nil
+	}
+
+	// The EOF status represents the file is complete - do some housework
+	if file_buffer.Eof {
+		uploadCounter.Inc()
+		uploadBytes.Add(float64(file_buffer.StoredSize))
+
+		// When the upload completes, we emit an event.
+		self.upload_completion_messages = append(
+			self.upload_completion_messages,
+			ordereddict.NewDict().
+				Set("Timestamp", time.Now().UTC().Unix()).
+				Set("ClientId", client_id).
+				Set("VFSPath", file_path_manager.Path().AsClientPath()).
+				Set("UploadName", file_buffer.Pathspec.Path).
+				Set("Accessor", file_buffer.Pathspec.Accessor).
+				Set("Size", file_buffer.Size).
+				Set("UploadedSize", file_buffer.StoredSize))
 
 		// Write the upload to the uplod metadata
 		rs_writer, err := result_sets.NewResultSetWriter(
@@ -261,10 +369,14 @@ func (self *ClientFlowRunner) FileBuffer(
 		if err != nil {
 			return err
 		}
+
+		defer rs_writer.Close()
+
 		rs_writer.Write(ordereddict.NewDict().
 			Set("Timestamp", utils.GetTime().Now().UTC().Unix()).
 			Set("started", utils.GetTime().Now().UTC().String()).
 			Set("vfs_path", file_path_manager.VisibleVFSPath()).
+			Set("Type", "").
 			Set("_Components", file_path_manager.Path().Components()).
 			Set("file_size", file_buffer.Size).
 
@@ -274,90 +386,46 @@ func (self *ClientFlowRunner) FileBuffer(
 			Set("_client_components", file_buffer.Pathspec.Components).
 			Set("uploaded_size", file_buffer.StoredSize))
 
-		rs_writer.Close()
-	}
+		// Additional row for sparse files
+		if file_buffer.Index != nil {
+			rs_writer.Write(ordereddict.NewDict().
+				Set("Timestamp", time.Now().UTC().Unix()).
+				Set("started", time.Now().UTC().String()).
+				Set("vfs_path", file_path_manager.VisibleVFSPath()+".idx").
+				Set("Type", "idx").
+				Set("_Components", file_path_manager.Path().Components()).
+				Set("_accessor", file_buffer.Pathspec.Accessor).
+				Set("_client_components", file_buffer.Pathspec.Components).
+				Set("file_size", file_buffer.Size).
+				Set("uploaded_size", file_buffer.StoredSize))
 
-	// Additional row for sparse files
-	if file_buffer.Index != nil {
-		rs_writer, err := result_sets.NewResultSetWriter(
-			file_store_factory, flow_path_manager.UploadMetadata(),
-			json.DefaultEncOpts(),
-			self.completer.GetCompletionFunc(),
-			result_sets.AppendMode)
-		if err != nil {
-			return err
+			// Write the index file (NOTE: the FileBuffer.Index only
+			// appears at the list Eof Packet.
+			fd, err := file_store_factory.WriteFile(
+				file_path_manager.IndexPath())
+			if err != nil {
+				return err
+			}
+			defer fd.Close()
+
+			err = fd.Truncate()
+			if err != nil {
+				return err
+			}
+
+			data := json.MustMarshalIndent(file_buffer.Index)
+			_, err = fd.Write(data)
+			if err != nil {
+				return err
+			}
 		}
-
-		rs_writer.Write(ordereddict.NewDict().
-			Set("Timestamp", time.Now().UTC().Unix()).
-			Set("started", time.Now().UTC().String()).
-			Set("vfs_path", file_path_manager.VisibleVFSPath()+".idx").
-			Set("_Components", file_path_manager.Path().Components()).
-			Set("_accessor", file_buffer.Pathspec.Accessor).
-			Set("_client_components", file_buffer.Pathspec.Components).
-			Set("file_size", file_buffer.Size).
-			Set("uploaded_size", file_buffer.StoredSize))
-
-		rs_writer.Close()
-	}
-
-	_, err = fd.Write(file_buffer.Data)
-	if err != nil {
-		logger.Error("While writing to %v: %v",
-			file_path_manager.Path().AsClientPath(), err)
-		return nil
-	}
-
-	// Does this packet have an index? It could be sparse.
-	if file_buffer.Index != nil {
-		fd, err := file_store_factory.WriteFile(
-			file_path_manager.IndexPath())
-		if err != nil {
-			return err
-		}
-		defer fd.Close()
-
-		err = fd.Truncate()
-		if err != nil {
-			return err
-		}
-
-		data := json.MustMarshalIndent(file_buffer.Index)
-		_, err = fd.Write(data)
-		if err != nil {
-			return err
-		}
-	}
-
-	// When the upload completes, we emit an event.
-	if file_buffer.Eof {
-		uploadCounter.Inc()
-		uploadBytes.Add(float64(file_buffer.StoredSize))
-
-		row := ordereddict.NewDict().
-			Set("Timestamp", time.Now().UTC().Unix()).
-			Set("ClientId", client_id).
-			Set("VFSPath", file_path_manager.Path().AsClientPath()).
-			Set("UploadName", file_buffer.Pathspec.Path).
-			Set("Accessor", file_buffer.Pathspec.Accessor).
-			Set("Size", file_buffer.Size).
-			Set("UploadedSize", file_buffer.StoredSize)
-
-		journal, err := services.GetJournal(self.config_obj)
-		if err != nil {
-			return err
-		}
-
-		return journal.PushRowsToArtifact(ctx, self.config_obj,
-			[]*ordereddict.Dict{row},
-			"System.Upload.Completion",
-			client_id, flow_id)
 	}
 
 	return nil
 }
 
 func (self *ClientFlowRunner) Close(ctx context.Context) {
+	self.closer()
 }
 
 func (self *ClientFlowRunner) FlowStats(
@@ -406,17 +474,12 @@ func (self *ClientFlowRunner) FlowStats(
 	// If this is the final response, then we will notify a flow
 	// completion.
 	if msg.FlowComplete {
-		row := ordereddict.NewDict().
-			Set("Timestamp", time.Now().UTC().Unix()).
-			Set("Flow", stats).
-			Set("FlowId", flow_id).
-			Set("ClientId", client_id)
-
-		journal, err := services.GetJournal(self.config_obj)
-		if err == nil {
-			journal.PushRowsToArtifactAsync(ctx,
-				self.config_obj, row, "System.Flow.Completion")
-		}
+		self.flow_completion_messages = append(self.flow_completion_messages,
+			ordereddict.NewDict().
+				Set("Timestamp", time.Now().UTC().Unix()).
+				Set("Flow", stats).
+				Set("FlowId", flow_id).
+				Set("ClientId", client_id))
 	}
 
 	return nil
@@ -445,6 +508,7 @@ func (self *ClientFlowRunner) VQLResponse(
 	if err != nil {
 		return err
 	}
+	path_manager.Clock = utils.GetTime()
 
 	file_store_factory := file_store.GetFileStore(self.config_obj)
 	rs_writer, err := result_sets.NewResultSetWriter(
@@ -462,8 +526,45 @@ func (self *ClientFlowRunner) VQLResponse(
 	return nil
 }
 
+type log_message struct {
+	Message string `json:"message"`
+}
+
+func (self *ClientFlowRunner) processAlert(
+	ctx context.Context, client_id, flow_id string,
+	msg *crypto_proto.LogMessage) error {
+
+	tmp := &log_message{}
+	err := json.Unmarshal([]byte(msg.Jsonl), tmp)
+	if err != nil {
+		return err
+	}
+
+	alert := &services.AlertMessage{}
+	err = json.Unmarshal([]byte(tmp.Message), alert)
+	if err != nil {
+		return err
+	}
+
+	alert.ClientId = client_id
+	alert.FlowId = flow_id
+
+	serialized, err := json.Marshal(alert)
+	if err != nil {
+		return err
+	}
+	serialized = append(serialized, '\n')
+
+	journal, err := services.GetJournal(self.config_obj)
+	if err != nil {
+		return err
+	}
+	return journal.PushJsonlToArtifact(ctx, self.config_obj,
+		serialized, 1, "Server.Internal.Alerts", "server", "")
+}
+
 func (self *ClientFlowRunner) LogMessage(
-	client_id, flow_id string,
+	ctx context.Context, client_id, flow_id string,
 	msg *crypto_proto.LogMessage) error {
 
 	flow_path_manager := paths.NewFlowPathManager(client_id, flow_id).Log()
@@ -485,6 +586,10 @@ func (self *ClientFlowRunner) LogMessage(
 	payload := artifacts.DeobfuscateString(self.config_obj, msg.Jsonl)
 
 	rs_writer.WriteJSONL([]byte(payload), uint64(msg.NumberOfRows))
+
+	if msg.Level == logging.ALERT {
+		return self.processAlert(ctx, client_id, flow_id, msg)
+	}
 
 	return nil
 }

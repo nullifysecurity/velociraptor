@@ -4,11 +4,10 @@ import (
 	"context"
 
 	"github.com/Velocidex/ordereddict"
-	"github.com/sirupsen/logrus"
 	"www.velocidex.com/golang/velociraptor/acls"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
-	"www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/services"
+	"www.velocidex.com/golang/velociraptor/vql"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/vfilter"
 	"www.velocidex.com/golang/vfilter/arg_parser"
@@ -70,18 +69,19 @@ func (self DeleteHuntPlugin) Call(ctx context.Context,
 			return
 		}
 
-		logging.LogAudit(config_obj, principal, "hunt_delete",
-			logrus.Fields{
-				"hunt_id": arg.HuntId,
-				"details": hunt_obj,
-			})
+		services.LogAudit(ctx,
+			config_obj, principal, "hunt_delete",
+			ordereddict.NewDict().
+				Set("hunt_id", arg.HuntId).
+				Set("details", hunt_obj))
 
 		for flow_details := range hunt_dispatcher.GetFlows(
 			ctx, config_obj, scope, arg.HuntId, 0) {
 
-			results, err := launcher.DeleteFlow(ctx, config_obj,
+			results, err := launcher.Storage().DeleteFlow(ctx, config_obj,
 				flow_details.Context.ClientId,
-				flow_details.Context.SessionId, arg.ReallyDoIt)
+				flow_details.Context.SessionId,
+				services.NoAuditLogging, arg.ReallyDoIt)
 			if err != nil {
 				scope.Log("hunt_delete: %v", err)
 				return
@@ -122,9 +122,10 @@ func (self DeleteHuntPlugin) Call(ctx context.Context,
 func (self DeleteHuntPlugin) Info(
 	scope vfilter.Scope, type_map *vfilter.TypeMap) *vfilter.PluginInfo {
 	return &vfilter.PluginInfo{
-		Name:    "hunt_delete",
-		Doc:     "Delete a hunt. ",
-		ArgType: type_map.AddType(scope, &DeleteHuntArgs{}),
+		Name:     "hunt_delete",
+		Doc:      "Delete a hunt. ",
+		ArgType:  type_map.AddType(scope, &DeleteHuntArgs{}),
+		Metadata: vql.VQLMetadata().Permissions(acls.SERVER_ADMIN).Build(),
 	}
 }
 

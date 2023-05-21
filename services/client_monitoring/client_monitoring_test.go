@@ -62,7 +62,7 @@ func (self *ClientMonitoringTestSuite) SetupTest() {
 	self.ConfigObj = self.TestSuite.LoadConfig()
 	self.ConfigObj.Services.ClientMonitoring = true
 
-	self.LoadArtifacts(mock_definitions)
+	self.LoadArtifactsIntoConfig(mock_definitions)
 
 	self.TestSuite.SetupTest()
 	self.client_id = "C.12312"
@@ -78,7 +78,9 @@ name: TestArtifact
 sources:
 - query:
     SELECT * FROM info()
-`, true, false)
+`, services.ArtifactOptions{
+		ValidateArtifact:  true,
+		ArtifactIsBuiltIn: false})
 
 	assert.NoError(self.T(), err)
 	_, err = repository.LoadYaml(`
@@ -86,7 +88,10 @@ name: SomethingElse
 sources:
 - query:
     SELECT * FROM info()
-`, true, false)
+`, services.ArtifactOptions{
+		ValidateArtifact:  true,
+		ArtifactIsBuiltIn: false})
+
 	assert.NoError(self.T(), err)
 
 }

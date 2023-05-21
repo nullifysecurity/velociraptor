@@ -2,7 +2,7 @@ import "./navigator.css";
 import _ from 'lodash';
 import logo from  "./velo.svg";
 import UserConfig from '../core/user.jsx';
-
+import api from '../core/api-service.jsx';
 import React, { Component } from 'react';
 import PropTypes from 'prop-types';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
@@ -72,7 +72,9 @@ class VeloNavigator extends Component {
             <>
               <div className="float-left navigator">
                 <button
-                  className="hamburger toolbar-buttons"
+                  data-tooltip={T("Expand sidebar")}
+                  data-position="right"
+                  className="hamburger toolbar-buttons btn-tooltip"
                   onClick={this.toggle}
                   aria-expanded={!this.state.collapsed}
                 >
@@ -82,7 +84,7 @@ class VeloNavigator extends Component {
                   <span className="sr-only">{T("Toggle Main Menu")}</span>
               </button>
               <a href="#welcome">
-                <img src={window.base_path + logo} className="velo-logo" alt={T("Welcome")} />
+                <img src={api.src_of(logo)} className="velo-logo" alt={T("Welcome")} />
               </a>
               <div
                 className={classNames({
@@ -98,7 +100,7 @@ class VeloNavigator extends Component {
                       {T("Main Menu")}
                     </h2>
                     <ul className="nav nav-pills navigator">
-                      <li className="nav-link" state="userDashboard">
+                      <li className="nav-link">
                         <NavLink exact={true} to="/dashboard">
                           <span>
                             <i className="navicon">
@@ -109,7 +111,7 @@ class VeloNavigator extends Component {
                         </NavLink>
                       </li>
 
-                      <li className="nav-link" state="hunts">
+                      <li className="nav-link">
                         <NavLink to="/hunts">
                           <span>
                             <i className="navicon">
@@ -120,7 +122,7 @@ class VeloNavigator extends Component {
                         </NavLink>
                       </li>
 
-                      <li className="nav-link" state="view_artifacts">
+                      <li className="nav-link">
                         <NavLink to="/artifacts">
                           <span>
                             <i className="navicon">
@@ -132,7 +134,7 @@ class VeloNavigator extends Component {
                       </li>
 
                       {!customization.disable_server_events && (
-                        <li className="nav-link" state="server_events">
+                        <li className="nav-link">
                           <NavLink to="/events/server">
                             <span>
                               <i className="navicon">
@@ -144,7 +146,7 @@ class VeloNavigator extends Component {
                         </li>
                       )}
 
-                      <li className="nav-link" state="server_artifacts">
+                      <li className="nav-link">
                         <NavLink to="/collected/server">
                           <span>
                             <i className="navicon">
@@ -155,7 +157,7 @@ class VeloNavigator extends Component {
                         </NavLink>
                       </li>
 
-                      <li className="nav-link" state="notebook">
+                      <li className="nav-link">
                         <NavLink to="/notebooks">
                           <span>
                             <i className="navicon">
@@ -167,7 +169,7 @@ class VeloNavigator extends Component {
                       </li>
 
                       {user_is_admin && !customization.disable_user_management && (
-                        <li className="nav-link" state="users">
+                        <li className="nav-link">
                           <NavLink to="/users">
                             <span>
                               <i className="navicon">
@@ -288,7 +290,7 @@ class VeloNavigator extends Component {
                                 <img
                                   className="sidebar-icon"
                                   alt=""
-                                  src={x.icon_url}
+                                  src={api.src_of(x.icon_url)}
                                 />
                               </span>
                               {T(x.text)}

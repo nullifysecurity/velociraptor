@@ -35,8 +35,10 @@ import (
 	yara "github.com/Velocidex/go-yara"
 	"github.com/Velocidex/ordereddict"
 	"www.velocidex.com/golang/velociraptor/accessors"
+	"www.velocidex.com/golang/velociraptor/acls"
 	"www.velocidex.com/golang/velociraptor/uploads"
 	"www.velocidex.com/golang/velociraptor/utils"
+	"www.velocidex.com/golang/velociraptor/vql"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	vfilter "www.velocidex.com/golang/vfilter"
 	"www.velocidex.com/golang/vfilter/arg_parser"
@@ -253,7 +255,12 @@ func (self *scanReporter) scanFileByAccessor(
 	}
 	defer f.Close()
 
-	self.file_info, _ = accessor.LstatWithOSPath(self.filename)
+	self.file_info, err = accessor.LstatWithOSPath(self.filename)
+	if err != nil {
+		self.scope.Log("yara: Failed to open %v with accessor %v: %v",
+			self.filename, accessor_name, err)
+		return
+	}
 	self.reader = utils.MakeReaderAtter(f)
 
 	// Support sparse file scanning
@@ -336,6 +343,7 @@ func (self *scanReporter) scanRange(start, end uint64, f accessors.ReadSeekClose
 
 		// Advance the read pointer
 		self.base_offset += uint64(n)
+		self.reader = nil
 
 		// We count an op as one MB scanned.
 		self.scope.ChargeOp()
@@ -397,6 +405,9 @@ type scanReporter struct {
 	end            uint64
 	reader         io.ReaderAt
 	ctx            context.Context
+
+	// For accessor scanning
+	buf []byte
 
 	// Internal scan state
 	scope     vfilter.Scope
@@ -514,9 +525,10 @@ func (self YaraScanPlugin) Info(
 	scope vfilter.Scope,
 	type_map *vfilter.TypeMap) *vfilter.PluginInfo {
 	return &vfilter.PluginInfo{
-		Name:    "yara",
-		Doc:     "Scan files using yara rules.",
-		ArgType: type_map.AddType(scope, &YaraScanPluginArgs{}),
+		Name:     "yara",
+		Doc:      "Scan files using yara rules.",
+		ArgType:  type_map.AddType(scope, &YaraScanPluginArgs{}),
+		Metadata: vql.VQLMetadata().Permissions(acls.FILESYSTEM_READ).Build(),
 	}
 }
 
@@ -536,9 +548,10 @@ func (self YaraProcPlugin) Info(
 	scope vfilter.Scope,
 	type_map *vfilter.TypeMap) *vfilter.PluginInfo {
 	return &vfilter.PluginInfo{
-		Name:    "proc_yara",
-		Doc:     "Scan processes using yara rules.",
-		ArgType: type_map.AddType(scope, &YaraProcPluginArgs{}),
+		Name:     "proc_yara",
+		Doc:      "Scan processes using yara rules.",
+		ArgType:  type_map.AddType(scope, &YaraProcPluginArgs{}),
+		Metadata: vql.VQLMetadata().Permissions(acls.MACHINE_STATE).Build(),
 	}
 }
 
@@ -553,6 +566,12 @@ func (self YaraProcPlugin) Call(
 
 		arg := &YaraProcPluginArgs{}
 		err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
+		if err != nil {
+			scope.Log("proc_yara: %v", err)
+			return
+		}
+
+		err = vql_subsystem.CheckAccess(scope, acls.MACHINE_STATE)
 		if err != nil {
 			scope.Log("proc_yara: %v", err)
 			return

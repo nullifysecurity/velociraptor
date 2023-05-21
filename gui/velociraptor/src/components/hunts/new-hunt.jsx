@@ -3,7 +3,7 @@ import PropTypes from 'prop-types';
 
 import _ from 'lodash';
 import Modal from 'react-bootstrap/Modal';
-import axios from 'axios';
+import {CancelToken} from 'axios';
 import StepWizard from 'react-step-wizard';
 import T from '../i8n/i8n.jsx';
 
@@ -54,6 +54,10 @@ class NewHuntConfigureHunt extends React.Component {
             this.context.traits.Permissions &&
             this.context.traits.Permissions.server_admin;
 
+        let is_start_hunt = this.context.traits &&
+            this.context.traits.Permissions &&
+            this.context.traits.Permissions.start_hunt;
+
         return (
             <>
               <Modal.Header closeButton>
@@ -62,7 +66,7 @@ class NewHuntConfigureHunt extends React.Component {
               <Modal.Body>
                 <Form>
                   <Form.Group as={Row}>
-                    <Form.Label column sm="3">Description</Form.Label>
+                    <Form.Label column sm="3">{T("Description")}</Form.Label>
                     <Col sm="8">
                       <Form.Control as="textarea" rows={3}
                                     id="hunt-description-text"
@@ -152,22 +156,23 @@ class NewHuntConfigureHunt extends React.Component {
                     </Form.Group>
                   }
 
-                  <OrgSelectorForm
-                    value={this.props.parameters.org_ids}
-                    onChange={(value) => this.setParam("org_ids", value)} />
-
                   { is_admin &&
-                    <Form.Group as={Row}>
-                      <Form.Label column sm="3">{T("Hunt State")}</Form.Label>
-                      <Col sm="8">
-                        <Form.Check
-                          value={this.props.parameters.force_start}
-                          label={T("Start Hunt Immediately")}
-                          onChange={e=>this.setParam(
-                              "force_start", !this.props.parameters.force_start)}
-                        />
-                      </Col>
-                    </Form.Group>
+                      <OrgSelectorForm
+                        value={this.props.parameters.org_ids}
+                        onChange={(value) => this.setParam("org_ids", value)} />
+                  }
+                  { is_start_hunt &&
+                      <Form.Group as={Row}>
+                        <Form.Label column sm="3">{T("Hunt State")}</Form.Label>
+                        <Col sm="8">
+                          <Form.Check
+                            value={this.props.parameters.force_start}
+                            label={T("Start Hunt Immediately")}
+                            onChange={e=>this.setParam(
+                                "force_start", !this.props.parameters.force_start)}
+                          />
+                        </Col>
+                      </Form.Group>
                   }
                   <EstimateHunt
                     params={this.props.parameters}/>
@@ -213,7 +218,7 @@ export default class NewHuntWizard extends React.Component {
     }
 
     componentDidMount = () => {
-        this.source = axios.CancelToken.source();
+        this.source = CancelToken.source();
         let state = this.setStateFromBase(this.props.baseHunt || {});
         this.setState(state);
 

@@ -47,16 +47,6 @@ func (self *ServerArtifactsTestSuite) SetupTest() {
 	assert.NoError(self.T(), err)
 }
 
-func (self *ServerArtifactsTestSuite) LoadArtifacts(definition string) services.Repository {
-	manager, _ := services.GetRepositoryManager(self.ConfigObj)
-	repository, _ := manager.GetGlobalRepository(self.ConfigObj)
-
-	_, err := repository.LoadYaml(definition, false, true)
-	assert.NoError(self.T(), err)
-
-	return repository
-}
-
 func (self *ServerArtifactsTestSuite) ScheduleAndWait(
 	name, user, flow_id string) *api_proto.FlowDetails {
 	ctx := self.Ctx
@@ -109,7 +99,10 @@ func (self *ServerArtifactsTestSuite) ScheduleAndWait(
 	// Wait for the collection to complete
 	var details *api_proto.FlowDetails
 	vtesting.WaitUntil(time.Second*50, self.T(), func() bool {
-		details, err = launcher.GetFlowDetails(self.ConfigObj, "server", flow_id)
+		mu.Lock()
+		defer mu.Unlock()
+		details, err = launcher.GetFlowDetails(
+			self.Ctx, self.ConfigObj, "server", flow_id)
 		assert.NoError(self.T(), err)
 
 		return details.Context.State != flows_proto.ArtifactCollectorContext_RUNNING
@@ -152,19 +145,20 @@ sources:
 - query: SELECT sleep(time=10000) FROM scope()
 `)
 
-	mu := &sync.Mutex{}
+	cancel_mu := &sync.Mutex{}
 	var details *api_proto.FlowDetails
 
 	go func() {
 		flow_details := self.ScheduleAndWait("Test1", "admin", "F.1234")
-		mu.Lock()
+		cancel_mu.Lock()
 		details = flow_details
-		mu.Unlock()
+		cancel_mu.Unlock()
 	}()
 
 	// Wait for the flow to be created
 	vtesting.WaitUntil(time.Second*5, self.T(), func() bool {
-		_, err := launcher.GetFlowDetails(self.ConfigObj, "server", "F.1234")
+		_, err := launcher.GetFlowDetails(
+			self.Ctx, self.ConfigObj, "server", "F.1234")
 		return err == nil
 	})
 
@@ -175,8 +169,8 @@ sources:
 	assert.Equal(self.T(), resp.FlowId, "F.1234")
 
 	vtesting.WaitUntil(time.Second*5, self.T(), func() bool {
-		mu.Lock()
-		defer mu.Unlock()
+		cancel_mu.Lock()
+		defer cancel_mu.Unlock()
 
 		return details != nil
 	})
@@ -234,7 +228,7 @@ sources:
 	log_data := test_utils.FileReadAll(self.T(), self.ConfigObj,
 		flow_path_manager.Log())
 	assert.Contains(self.T(), log_data,
-		"Uploaded /clients/server/collections/F.1234/uploads/test.txt")
+		"Uploaded /test.txt")
 
 	// Make sure the upload data is stored in the upload file.
 	uploads_data := test_utils.FileReadAll(self.T(), self.ConfigObj,

@@ -19,7 +19,6 @@ package flows
 
 import (
 	"context"
-	"strings"
 
 	"github.com/Velocidex/ordereddict"
 	"www.velocidex.com/golang/velociraptor/acls"
@@ -27,6 +26,7 @@ import (
 	flows_proto "www.velocidex.com/golang/velociraptor/flows/proto"
 	"www.velocidex.com/golang/velociraptor/json"
 	"www.velocidex.com/golang/velociraptor/services"
+	"www.velocidex.com/golang/velociraptor/vql"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/velociraptor/vql/acl_managers"
 	"www.velocidex.com/golang/velociraptor/vql/tools/collector"
@@ -73,12 +73,18 @@ func (self *ScheduleCollectionFunction) Call(ctx context.Context,
 		return vfilter.Null{}
 	}
 
+	client_info_manager, err := services.GetClientInfoManager(config_obj)
+	if err != nil {
+		scope.Log("collect_client: %v", err)
+		return vfilter.Null{}
+	}
+
 	// Scheduling artifacts on the server requires higher
 	// permissions.
 	var permission acls.ACL_PERMISSION
 	if arg.ClientId == "server" {
 		permission = acls.SERVER_ADMIN
-	} else if strings.HasPrefix(arg.ClientId, "C.") {
+	} else if client_info_manager.ValidateClientId(arg.ClientId) == nil {
 		permission = acls.COLLECT_CLIENT
 	} else {
 		scope.Log("collect_client: unsupported client id")
@@ -190,6 +196,8 @@ func (self ScheduleCollectionFunction) Info(scope vfilter.Scope, type_map *vfilt
 		Name:    "collect_client",
 		Doc:     "Launch an artifact collection against a client.",
 		ArgType: type_map.AddType(scope, &ScheduleCollectionFunctionArg{}),
+		Metadata: vql.VQLMetadata().Permissions(
+			acls.COLLECT_CLIENT, acls.COLLECT_SERVER).Build(),
 	}
 }
 

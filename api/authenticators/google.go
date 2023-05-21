@@ -25,15 +25,16 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
-	"strings"
 	"time"
 
+	"github.com/Velocidex/ordereddict"
 	"github.com/gorilla/csrf"
 	"github.com/sirupsen/logrus"
 	context "golang.org/x/net/context"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
+	utils "www.velocidex.com/golang/velociraptor/api/utils"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/constants"
 	"www.velocidex.com/golang/velociraptor/gui/velociraptor"
@@ -52,21 +53,20 @@ type GoogleAuthenticator struct {
 }
 
 func (self *GoogleAuthenticator) LoginHandler() string {
-	return self.base + "auth/google/login"
+	return utils.Join(self.base, "/auth/google/login")
 }
 
 // The URL that will be used to log in.
 func (self *GoogleAuthenticator) LoginURL() string {
-	return self.base + "auth/google/login"
+	return utils.Join(self.base, "/auth/google/login")
 }
 
 func (self *GoogleAuthenticator) CallbackHandler() string {
-	return self.base + "auth/google/callback"
+	return utils.Join(self.base, "/auth/google/callback")
 }
 
 func (self *GoogleAuthenticator) CallbackURL() string {
-	return self.public_url +
-		strings.TrimPrefix(self.base, "/") + "auth/google/callback"
+	return utils.Join(self.public_url, self.base, "/auth/google/callback")
 }
 
 func (self *GoogleAuthenticator) ProviderName() string {
@@ -86,6 +86,10 @@ func (self *GoogleAuthenticator) AddLogoff(mux *http.ServeMux) error {
 
 func (self *GoogleAuthenticator) IsPasswordLess() bool {
 	return true
+}
+
+func (self *GoogleAuthenticator) RequireClientCerts() bool {
+	return false
 }
 
 func (self *GoogleAuthenticator) AuthRedirectTemplate() string {
@@ -119,7 +123,7 @@ func (self *GoogleAuthenticator) oauthGoogleLogin() http.Handler {
 		// Create oauthState cookie
 		oauthState, err := r.Cookie("oauthstate")
 		if err != nil {
-			oauthState = generateStateOauthCookie(w)
+			oauthState = generateStateOauthCookie(self.config_obj, w)
 		}
 
 		u := googleOauthConfig.AuthCodeURL(oauthState.Value, oauth2.ApprovalForce)
@@ -127,7 +131,9 @@ func (self *GoogleAuthenticator) oauthGoogleLogin() http.Handler {
 	})
 }
 
-func generateStateOauthCookie(w http.ResponseWriter) *http.Cookie {
+func generateStateOauthCookie(
+	config_obj *config_proto.Config,
+	w http.ResponseWriter) *http.Cookie {
 	// Do not expire from the browser - we will expire it anyway.
 	var expiration = time.Now().Add(365 * 24 * time.Hour)
 
@@ -136,12 +142,12 @@ func generateStateOauthCookie(w http.ResponseWriter) *http.Cookie {
 	state := base64.URLEncoding.EncodeToString(b)
 	cookie := http.Cookie{
 		Name:     "oauthstate",
+		Path:     utils.GetBasePath(config_obj),
 		Value:    state,
 		Secure:   true,
 		HttpOnly: true,
 		Expires:  expiration}
 	http.SetCookie(w, &cookie)
-
 	return &cookie
 }
 
@@ -153,7 +159,8 @@ func (self *GoogleAuthenticator) oauthGoogleCallback() http.Handler {
 		if oauthState == nil || r.FormValue("state") != oauthState.Value {
 			logging.GetLogger(self.config_obj, &logging.GUIComponent).
 				Error("invalid oauth google state")
-			http.Redirect(w, r, self.base, http.StatusTemporaryRedirect)
+			http.Redirect(w, r, utils.Homepage(self.config_obj),
+				http.StatusTemporaryRedirect)
 			return
 		}
 
@@ -163,7 +170,8 @@ func (self *GoogleAuthenticator) oauthGoogleCallback() http.Handler {
 				WithFields(logrus.Fields{
 					"err": err.Error(),
 				}).Error("getUserDataFromGoogle")
-			http.Redirect(w, r, self.base, http.StatusTemporaryRedirect)
+			http.Redirect(w, r, utils.Homepage(self.config_obj),
+				http.StatusTemporaryRedirect)
 			return
 		}
 
@@ -174,7 +182,8 @@ func (self *GoogleAuthenticator) oauthGoogleCallback() http.Handler {
 				WithFields(logrus.Fields{
 					"err": err.Error(),
 				}).Error("getUserDataFromGoogle")
-			http.Redirect(w, r, self.base, http.StatusTemporaryRedirect)
+			http.Redirect(w, r, utils.Homepage(self.config_obj),
+				http.StatusTemporaryRedirect)
 			return
 		}
 
@@ -190,12 +199,14 @@ func (self *GoogleAuthenticator) oauthGoogleCallback() http.Handler {
 				WithFields(logrus.Fields{
 					"err": err.Error(),
 				}).Error("getUserDataFromGoogle")
-			http.Redirect(w, r, self.base, http.StatusTemporaryRedirect)
+			http.Redirect(w, r, utils.Homepage(self.config_obj),
+				http.StatusTemporaryRedirect)
 			return
 		}
 
 		http.SetCookie(w, cookie)
-		http.Redirect(w, r, self.base, http.StatusTemporaryRedirect)
+		http.Redirect(w, r, utils.Homepage(self.config_obj),
+			http.StatusTemporaryRedirect)
 	})
 }
 
@@ -230,22 +241,22 @@ func (self *GoogleAuthenticator) getUserDataFromGoogle(
 }
 
 func installLogoff(config_obj *config_proto.Config, mux *http.ServeMux) {
-	base := getBasePath(config_obj)
-	mux.Handle(base+"app/logoff.html",
+	base := utils.GetBasePath(config_obj)
+	mux.Handle(utils.Join(base, "/app/logoff.html"),
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			params := r.URL.Query()
 			old_username, ok := params["username"]
 			username := ""
 			if ok && len(old_username) == 1 {
-				logging.LogAudit(
-					config_obj, old_username[0], "LogOff", logrus.Fields{})
+				services.LogAudit(r.Context(),
+					config_obj, old_username[0], "LogOff", ordereddict.NewDict())
 				username = old_username[0]
 			}
 
 			// Clear the cookie
 			http.SetCookie(w, &http.Cookie{
 				Name:     "VelociraptorAuth",
-				Path:     base,
+				Path:     utils.GetBaseDirectory(config_obj),
 				Value:    "deleted",
 				Secure:   true,
 				HttpOnly: true,
@@ -321,13 +332,13 @@ func reject_with_username(
 	err error, username, login_url, provider string) {
 
 	// Log into the audit log.
-	logging.LogAudit(config_obj, username, "User rejected by GUI",
-		logrus.Fields{
-			"remote": r.RemoteAddr,
-			"method": r.Method,
-			"url":    r.URL.String(),
-			"err":    err.Error(),
-		})
+	services.LogAudit(r.Context(),
+		config_obj, username, "User rejected by GUI",
+		ordereddict.NewDict().
+			Set("remote", r.RemoteAddr).
+			Set("method", r.Method).
+			Set("url", r.URL.String()).
+			Set("err", err.Error()))
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)

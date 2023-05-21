@@ -32,6 +32,7 @@ import (
 	"github.com/magefile/mage/mg"
 	"github.com/magefile/mage/sh"
 	"www.velocidex.com/golang/velociraptor/constants"
+	"www.velocidex.com/golang/velociraptor/json"
 )
 
 var (
@@ -126,41 +127,14 @@ func (self *Builder) Env() map[string]string {
 	if self.cc != "" {
 		env["CC"] = self.cc
 	}
-
+	fmt.Printf("Build Environment: %v\n", json.MustMarshalString(env))
 	return env
-}
-
-// Make sure the correct version of the syso file is present. If we
-// are building for non windows platforms we need to remove it
-// completely.
-func (self Builder) ensureSyso() error {
-	sh.Rm("bin/rsrc.syso")
-
-	if self.goos == "windows" {
-		switch self.arch {
-		case "386":
-			err := sh.Copy("bin/rsrc.syso", "docs/rsrc_386.syso")
-			if err != nil {
-				return err
-			}
-		case "amd64":
-			err := sh.Copy("bin/rsrc.syso", "docs/rsrc_amd64.syso")
-			if err != nil {
-				return err
-			}
-
-		}
-	}
-
-	return nil
 }
 
 func (self Builder) Run() error {
 	if err := os.Mkdir("output", 0700); err != nil && !os.IsExist(err) {
 		return fmt.Errorf("failed to create output: %v", err)
 	}
-
-	self.ensureSyso()
 
 	err := ensure_assets()
 	if err != nil {
@@ -245,6 +219,17 @@ func LinuxMusl() error {
 		extra_name:    "-musl",
 		extra_ldflags: "-linkmode external -extldflags \"-static\"",
 		arch:          "amd64"}.Run()
+}
+
+func LinuxMusl386() error {
+	return Builder{
+		extra_tags:    " release yara disable_gui ",
+		goos:          "linux",
+		cc:            "musl-gcc",
+		extra_name:    "-musl",
+		disable_cgo:   true,
+		extra_ldflags: "-linkmode external -extldflags \"-static\"",
+		arch:          "386"}.Run()
 }
 
 // A Linux binary without the GUI

@@ -124,6 +124,9 @@ func CheckAccessWithToken(
 	case acls.COLLECT_CLIENT:
 		return token.CollectClient, nil
 
+	case acls.START_HUNT:
+		return token.StartHunt, nil
+
 	case acls.COLLECT_SERVER:
 		return token.CollectServer, nil
 
@@ -160,9 +163,11 @@ func CheckAccessWithToken(
 	case acls.PREPARE_RESULTS:
 		return token.PrepareResults, nil
 
+	case acls.DELETE_RESULTS:
+		return token.DeleteResults, nil
+
 	case acls.DATASTORE_ACCESS:
 		return token.DatastoreAccess, nil
-
 	}
 
 	return false, nil

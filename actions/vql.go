@@ -31,6 +31,7 @@ import (
 	humanize "github.com/dustin/go-humanize"
 	actions_proto "www.velocidex.com/golang/velociraptor/actions/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
+	"www.velocidex.com/golang/velociraptor/constants"
 	crypto_proto "www.velocidex.com/golang/velociraptor/crypto/proto"
 	"www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/responder"
@@ -129,7 +130,10 @@ func (self VQLClientAction) StartQuery(
 	repository := manager.NewRepository()
 	for _, artifact := range arg.Artifacts {
 		artifact.BuiltIn = false
-		_, err := repository.LoadProto(artifact, true /* validate */)
+		_, err := repository.LoadProto(artifact,
+			services.ArtifactOptions{
+				ValidateArtifact: true,
+			})
 		if err != nil {
 			responder.RaiseError(ctx, fmt.Sprintf(
 				"Failed to compile artifact %v.", artifact.Name))
@@ -152,7 +156,8 @@ func (self VQLClientAction) StartQuery(
 		ACLManager: acl_managers.NullACLManager{},
 		Env: ordereddict.NewDict().
 			// Make the session id available in the query.
-			Set("_SessionId", responder.FlowContext().SessionId()),
+			Set("_SessionId", responder.FlowContext().SessionId()).
+			Set(constants.SCOPE_RESPONDER, responder),
 		Uploader:   uploader,
 		Repository: repository,
 		Logger:     log.New(&LogWriter{config_obj, responder, ctx}, "", 0),
@@ -167,7 +172,7 @@ func (self VQLClientAction) StartQuery(
 
 	// Allow VQL to gain access to the flow responder for low level
 	// functionality.
-	scope.SetContext("_Responder", responder)
+	scope.SetContext(constants.SCOPE_RESPONDER_CONTEXT, responder)
 
 	if runtime.GOARCH == "386" &&
 		os.Getenv("PROCESSOR_ARCHITEW6432") == "AMD64" {

@@ -1,12 +1,14 @@
 package authenticators
 
 import (
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"sync"
 
+	utils "www.velocidex.com/golang/velociraptor/api/utils"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 )
 
@@ -25,6 +27,7 @@ type Authenticator interface {
 	AuthenticateUserHandler(parent http.Handler) http.Handler
 
 	IsPasswordLess() bool
+	RequireClientCerts() bool
 	AuthRedirectTemplate() string
 }
 
@@ -79,8 +82,8 @@ func init() {
 		return &AzureAuthenticator{
 			config_obj:    config_obj,
 			authenticator: auth_config,
-			base:          getBasePath(config_obj),
-			public_url:    getPublicURL(config_obj),
+			base:          utils.GetBasePath(config_obj),
+			public_url:    utils.GetPublicURL(config_obj),
 		}, nil
 	})
 
@@ -93,8 +96,8 @@ func init() {
 		return &GitHubAuthenticator{
 			config_obj:    config_obj,
 			authenticator: auth_config,
-			base:          getBasePath(config_obj),
-			public_url:    getPublicURL(config_obj),
+			base:          utils.GetBasePath(config_obj),
+			public_url:    utils.GetPublicURL(config_obj),
 		}, nil
 	})
 
@@ -107,8 +110,8 @@ func init() {
 		return &GoogleAuthenticator{
 			config_obj:    config_obj,
 			authenticator: auth_config,
-			base:          getBasePath(config_obj),
-			public_url:    getPublicURL(config_obj),
+			base:          utils.GetBasePath(config_obj),
+			public_url:    utils.GetPublicURL(config_obj),
 		}, nil
 	})
 
@@ -121,9 +124,30 @@ func init() {
 		auth_config *config_proto.Authenticator) (Authenticator, error) {
 		return &BasicAuthenticator{
 			config_obj: config_obj,
-			base:       getBasePath(config_obj),
-			public_url: getPublicURL(config_obj),
+			base:       utils.GetBasePath(config_obj),
+			public_url: utils.GetPublicURL(config_obj),
 		}, nil
+	})
+
+	RegisterAuthenticator("certs", func(config_obj *config_proto.Config,
+		auth_config *config_proto.Authenticator) (Authenticator, error) {
+		if config_obj.GUI == nil || config_obj.GUI.UsePlainHttp {
+			return nil, errors.New("'Certs' authenticator must use TLS!")
+		}
+
+		result := &CertAuthenticator{
+			config_obj:    config_obj,
+			base:          utils.GetBasePath(config_obj),
+			public_url:    utils.GetPublicURL(config_obj),
+			x509_roots:    x509.NewCertPool(),
+			default_roles: auth_config.DefaultRolesForUnknownUser,
+		}
+		if config_obj.Client != nil {
+			result.x509_roots.AppendCertsFromPEM([]byte(
+				config_obj.Client.CaCertificate))
+		}
+
+		return result, nil
 	})
 
 	RegisterAuthenticator("oidc", func(config_obj *config_proto.Config,
@@ -135,8 +159,8 @@ func init() {
 		return &OidcAuthenticator{
 			config_obj:    config_obj,
 			authenticator: auth_config,
-			base:          getBasePath(config_obj),
-			public_url:    getPublicURL(config_obj),
+			base:          utils.GetBasePath(config_obj),
+			public_url:    utils.GetPublicURL(config_obj),
 		}, nil
 	})
 
@@ -144,20 +168,4 @@ func init() {
 		auth_config *config_proto.Authenticator) (Authenticator, error) {
 		return NewMultiAuthenticator(config_obj, auth_config)
 	})
-}
-
-// Ensure base path start and ends with /
-func getBasePath(config_obj *config_proto.Config) string {
-	bare := strings.TrimSuffix(config_obj.GUI.BasePath, "/")
-	bare = strings.TrimPrefix(bare, "/")
-	if bare == "" {
-		return "/"
-	}
-	return "/" + bare + "/"
-}
-
-// Ensure public URL start and ends with /
-func getPublicURL(config_obj *config_proto.Config) string {
-	bare := strings.TrimSuffix(config_obj.GUI.PublicUrl, "/")
-	return bare + "/"
 }

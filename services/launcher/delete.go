@@ -20,13 +20,19 @@ import (
 	"www.velocidex.com/golang/velociraptor/utils"
 )
 
-func (self *Launcher) DeleteFlow(
+func (self *FlowStorageManager) DeleteFlow(
 	ctx context.Context,
 	config_obj *config_proto.Config,
-	client_id string, flow_id string,
+	client_id string, flow_id string, principal string,
 	really_do_it bool) ([]*services.DeleteFlowResponse, error) {
 
-	collection_details, err := self.GetFlowDetails(config_obj, client_id, flow_id)
+	launcher, err := services.GetLauncher(config_obj)
+	if err != nil {
+		return nil, err
+	}
+
+	collection_details, err := launcher.GetFlowDetails(
+		ctx, config_obj, client_id, flow_id)
 	if err != nil {
 		return nil, err
 	}
@@ -34,6 +40,15 @@ func (self *Launcher) DeleteFlow(
 	collection_context := collection_details.Context
 	if collection_context == nil {
 		return nil, nil
+	}
+
+	if really_do_it && principal != "" {
+		services.LogAudit(ctx,
+			config_obj, principal, "delete_flow",
+			ordereddict.NewDict().
+				Set("client_id", client_id).
+				Set("flow_id", flow_id).
+				Set("flow", collection_context))
 	}
 
 	flow_path_manager := paths.NewFlowPathManager(client_id, flow_id)
@@ -50,6 +65,14 @@ func (self *Launcher) DeleteFlow(
 		file_store_factory, flow_path_manager.UploadMetadata())
 	if err == nil {
 		for row := range reader.Rows(ctx) {
+			components, pres := row.GetStrings("_Components")
+			if pres {
+				pathspec := path_specs.NewUnsafeFilestorePath(
+					components...).SetType(api.PATH_TYPE_FILESTORE_ANY)
+				r.emit_fs("Upload", pathspec)
+				continue
+			}
+
 			upload, pres := row.GetString("vfs_path")
 			if pres {
 				// Each row is the full filestore path of the upload.
@@ -60,6 +83,7 @@ func (self *Launcher) DeleteFlow(
 				r.emit_fs("Upload", pathspec)
 			}
 		}
+		reader.Close()
 	}
 
 	// Order results to facilitate deletion - container deletion
@@ -91,6 +115,7 @@ func (self *Launcher) DeleteFlow(
 		SetType(api.PATH_TYPE_FILESTORE_JSON_INDEX))
 	r.emit_ds("CollectionContext", flow_path_manager.Path())
 	r.emit_ds("Task", flow_path_manager.Task())
+	r.emit_ds("Stats", flow_path_manager.Stats())
 
 	// Walk the flow's datastore and filestore
 	db, err := datastore.GetDB(config_obj)
@@ -193,7 +218,7 @@ func (self *reporter) emit_fs(
 func (self *Launcher) DeleteEvents(
 	ctx context.Context,
 	config_obj *config_proto.Config,
-	artifact, client_id string,
+	principal, artifact, client_id string,
 	start_time, end_time time.Time,
 	really_do_it bool) ([]*services.DeleteFlowResponse, error) {
 
@@ -274,6 +299,16 @@ func (self *Launcher) DeleteEvents(
 				Error: error_message,
 			})
 		}
+	}
+
+	// Log into the audit log
+	if really_do_it {
+		return result, services.LogAudit(ctx, config_obj, principal, "DeleteEvents",
+			ordereddict.NewDict().
+				Set("artifact", artifact).
+				Set("client_id", client_id).
+				Set("start_time", start_time).
+				Set("end_time", end_time))
 	}
 
 	return result, nil

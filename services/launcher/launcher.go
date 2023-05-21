@@ -127,16 +127,13 @@ import (
 	"github.com/go-errors/errors"
 	"google.golang.org/protobuf/proto"
 	actions_proto "www.velocidex.com/golang/velociraptor/actions/proto"
-	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
 	"www.velocidex.com/golang/velociraptor/artifacts"
 	artifacts_proto "www.velocidex.com/golang/velociraptor/artifacts/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/constants"
 	crypto_proto "www.velocidex.com/golang/velociraptor/crypto/proto"
-	"www.velocidex.com/golang/velociraptor/datastore"
 	flows_proto "www.velocidex.com/golang/velociraptor/flows/proto"
 	"www.velocidex.com/golang/velociraptor/logging"
-	"www.velocidex.com/golang/velociraptor/paths"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/utils"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
@@ -176,7 +173,9 @@ func getCollectorSpecs(
 	return result
 }
 
-type Launcher struct{}
+type Launcher struct {
+	Storage_ services.FlowStorer
+}
 
 func (self *Launcher) CompileCollectorArgs(
 	ctx context.Context,
@@ -403,7 +402,8 @@ func (self *Launcher) GetVQLCollectorArgs(
 	}
 
 	for _, tool := range artifact.Tools {
-		err = AddToolDependency(ctx, config_obj, tool.Name, vql_collector_args)
+		err = AddToolDependency(ctx, config_obj, tool.Name,
+			tool.Version, vql_collector_args)
 		if err != nil {
 			return nil, err
 		}
@@ -431,7 +431,8 @@ func (self *Launcher) EnsureToolsDeclared(
 			return err
 		}
 
-		_, err = inventory.GetToolInfo(ctx, config_obj, tool.Name)
+		_, err = inventory.GetToolInfo(
+			ctx, config_obj, tool.Name, tool.Version)
 		if err != nil {
 			// Add tool info if it is not known but do not
 			// override existing tool. This allows the
@@ -456,13 +457,13 @@ func (self *Launcher) EnsureToolsDeclared(
 func AddToolDependency(
 	ctx context.Context,
 	config_obj *config_proto.Config,
-	tool string, vql_collector_args *actions_proto.VQLCollectorArgs) error {
+	tool, version string, vql_collector_args *actions_proto.VQLCollectorArgs) error {
 	inventory, err := services.GetInventory(config_obj)
 	if err != nil {
 		return err
 	}
 
-	tool_info, err := inventory.GetToolInfo(ctx, config_obj, tool)
+	tool_info, err := inventory.GetToolInfo(ctx, config_obj, tool, version)
 	if err != nil {
 		return err
 	}
@@ -533,32 +534,35 @@ func (self *Launcher) ScheduleArtifactCollection(
 		args = append(args, compiled...)
 	}
 
-	return self.ScheduleArtifactCollectionFromCollectorArgs(
-		ctx, config_obj, collector_request, args, completion)
+	return self.WriteArtifactCollectionRecord(
+		ctx, config_obj, collector_request, args,
+		func(task *crypto_proto.VeloMessage) {
+			client_manager, err := services.GetClientInfoManager(config_obj)
+			if err != nil {
+				return
+			}
+
+			// Queue and notify the client about the new tasks
+			client_manager.QueueMessageForClient(
+				ctx, collector_request.ClientId, task,
+				services.NOTIFY_CLIENT, completion)
+		})
 }
 
-func (self *Launcher) ScheduleArtifactCollectionFromCollectorArgs(
+func (self *Launcher) WriteArtifactCollectionRecord(
 	ctx context.Context,
 	config_obj *config_proto.Config,
 	collector_request *flows_proto.ArtifactCollectorArgs,
 	vql_collector_args []*actions_proto.VQLCollectorArgs,
-	completion func()) (string, error) {
+	completion func(task *crypto_proto.VeloMessage)) (string, error) {
 
-	client_id := collector_request.ClientId
-	if client_id == "" {
-		return "", errors.New("Client id not provided.")
-	}
-
-	if !utils.ValidateClientId(client_id) {
-		return "", errors.New("Client id not valid.")
-	}
-
-	db, err := datastore.GetDB(config_obj)
+	client_manager, err := services.GetClientInfoManager(config_obj)
 	if err != nil {
 		return "", err
 	}
 
-	client_manager, err := services.GetClientInfoManager(config_obj)
+	client_id := collector_request.ClientId
+	err = client_manager.ValidateClientId(client_id)
 	if err != nil {
 		return "", err
 	}
@@ -613,9 +617,6 @@ func (self *Launcher) ScheduleArtifactCollectionFromCollectorArgs(
 		task.Urgent = true
 	}
 
-	// Save the collection context first.
-	flow_path_manager := paths.NewFlowPathManager(client_id, session_id)
-
 	// Generate a new collection context for this flow.
 	collection_context := &flows_proto.ArtifactCollectorContext{
 		SessionId:           session_id,
@@ -628,11 +629,8 @@ func (self *Launcher) ScheduleArtifactCollectionFromCollectorArgs(
 	}
 
 	// Record the tasks for provenance of what we actually did.
-	err = db.SetSubjectWithCompletion(config_obj,
-		flow_path_manager.Task(),
-		&api_proto.ApiFlowRequestDetails{
-			Items: []*crypto_proto.VeloMessage{task},
-		}, nil)
+	err = self.Storage().WriteTask(
+		ctx, config_obj, client_id, redactTask(task))
 	if err != nil {
 		return "", err
 	}
@@ -645,9 +643,11 @@ func (self *Launcher) ScheduleArtifactCollectionFromCollectorArgs(
 			return "", err
 		}
 
-		err = db.SetSubjectWithCompletion(config_obj,
-			flow_path_manager.Path(),
-			collection_context, func() {})
+		// Write the collection object so the GUI can start tracking
+		// it.
+		err = self.Storage().WriteFlow(
+			ctx, config_obj, redactCollectContext(collection_context),
+			utils.BackgroundWriter)
 		if err != nil {
 			return "", err
 		}
@@ -658,15 +658,11 @@ func (self *Launcher) ScheduleArtifactCollectionFromCollectorArgs(
 	}
 
 	// Store the collection_context first, then queue all the tasks.
-	err = db.SetSubjectWithCompletion(config_obj,
-		flow_path_manager.Path(),
-		collection_context,
+	err = self.Storage().WriteFlow(ctx, config_obj,
+		redactCollectContext(collection_context),
 
 		func() {
-			// Queue and notify the client about the new tasks
-			client_manager.QueueMessageForClient(
-				ctx, client_id, task,
-				services.NOTIFY_CLIENT, utils.BackgroundWriter)
+			completion(task)
 		})
 	if err != nil {
 		return "", err
@@ -706,6 +702,7 @@ func addOrReplaceParameter(
 	for _, item := range result {
 		if item.Key == param.Key {
 			item.Value = param.Value
+			param.Comment = item.Comment
 			return result
 		}
 	}
@@ -741,5 +738,7 @@ func NewLauncherService(
 	wg *sync.WaitGroup,
 	config_obj *config_proto.Config) (services.Launcher, error) {
 
-	return &Launcher{}, nil
+	return &Launcher{
+		Storage_: &FlowStorageManager{},
+	}, nil
 }

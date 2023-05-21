@@ -3,7 +3,7 @@ import './tool-viewer.css';
 import _ from 'lodash';
 import React from 'react';
 import PropTypes from 'prop-types';
-import axios from 'axios';
+import {CancelToken} from 'axios';
 import Modal from 'react-bootstrap/Modal';
 import Button from 'react-bootstrap/Button';
 import api from '../core/api-service.jsx';
@@ -14,7 +14,6 @@ import InputGroup from 'react-bootstrap/InputGroup';
 import T from '../i8n/i8n.jsx';
 import Select from 'react-select';
 import VeloValueRenderer from '../utils/value.jsx';
-
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 
 import classNames from "classnames";
@@ -26,7 +25,7 @@ class ResetToolDialog extends React.Component {
     };
 
     componentDidMount = () => {
-        this.source = axios.CancelToken.source();
+        this.source = CancelToken.source();
     }
 
     componentWillUnmount() {
@@ -46,6 +45,8 @@ class ResetToolDialog extends React.Component {
         return <Modal show={true}
                       enforceFocus={true}
                       scrollable={false}
+                      size="lg"
+                      dialogClassName="modal-90w"
                       onHide={this.props.onClose}>
                  <Modal.Header closeButton>
                    <Modal.Title>{T("Tool")} {
@@ -74,7 +75,7 @@ export default class ToolViewer extends React.Component {
     };
 
     componentDidMount = () => {
-        this.source = axios.CancelToken.source();
+        this.source = CancelToken.source();
         this.fetchToolInfo();
     }
 
@@ -102,6 +103,15 @@ export default class ToolViewer extends React.Component {
         tool: {},
         tool_file: null,
         remote_url: "",
+    }
+
+    acceptUpstreamHash = ()=>{
+        // Accepts the upstream hash by updating the expected hash to it.
+        let tool = Object.assign({}, this.state.tool);
+        tool.expected_hash = tool.invalid_hash;
+        tool.materialize = true;
+        tool.invalid_hash = "";
+        this.setToolInfo(tool);
     }
 
     uploadFile = () => {
@@ -132,7 +142,7 @@ export default class ToolViewer extends React.Component {
                  this.source.token).then((response) => {
             this.setState({tool: response.data});
         }).finally(() => {
-            this.setState({inflight: false});
+            this.fetchToolInfo(()=> this.setState({inflight: false}));
         });
     };
 
@@ -378,6 +388,30 @@ export default class ToolViewer extends React.Component {
                       <>
                         <dt className="col-4">{T("Tool Name")}</dt>
                         <dd className="col-8">{tool.name}</dd></>}
+
+                    { tool.version &&
+                      <>
+                        <dt className="col-4">{T("Tool Version")}</dt>
+                        <dd className="col-8">{tool.version}</dd></>}
+
+                    { tool.expected_hash &&
+                      <>
+                        <dt className="col-4">{T("Expected Hash")}</dt>
+                        <dd className="col-8">
+                          {tool.expected_hash}
+                        </dd></>}
+
+                    { tool.invalid_hash &&
+                      <>
+                        <dt className="col-4">{T("Upstream Hash")}</dt>
+                        <dd className="col-8">
+                          {tool.invalid_hash}
+                          <Button
+                             onClick={x=>this.acceptUpstreamHash()}
+                            variant="outline-info">
+                            {T("Click to accept")}
+                          </Button>
+                        </dd></>}
 
                     { tool.url &&
                       <>

@@ -21,21 +21,21 @@ import (
 	"fmt"
 	"io/ioutil"
 	"regexp"
+	"strings"
 
 	"github.com/Velocidex/ordereddict"
 	"www.velocidex.com/golang/velociraptor/accessors"
 	"www.velocidex.com/golang/velociraptor/acls"
 	"www.velocidex.com/golang/velociraptor/config"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
-	"www.velocidex.com/golang/velociraptor/file_store"
 	"www.velocidex.com/golang/velociraptor/file_store/csv"
 	"www.velocidex.com/golang/velociraptor/json"
 	"www.velocidex.com/golang/velociraptor/paths"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/third_party/zip"
 	"www.velocidex.com/golang/velociraptor/utils"
+	"www.velocidex.com/golang/velociraptor/vql"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
-	"www.velocidex.com/golang/velociraptor/vql/networking"
 	"www.velocidex.com/golang/vfilter"
 	"www.velocidex.com/golang/vfilter/arg_parser"
 )
@@ -52,6 +52,7 @@ const (
 
 type RepackFunctionArgs struct {
 	Target     string            `vfilter:"optional,field=target,doc=The name of the target OS to repack (VelociraptorWindows, VelociraptorLinux, VelociraptorDarwin)"`
+	Version    string            `vfilter:"optional,field=version,doc=Velociraptor Version to repack"`
 	Exe        *accessors.OSPath `vfilter:"optional,field=exe,doc=Alternative a path to the executable to repack"`
 	Accessor   string            `vfilter:"optional,field=accessor,doc=The accessor to use to read the file."`
 	Binaries   []string          `vfilter:"optional,field=binaries,doc=List of tool names that will be repacked into the target"`
@@ -98,7 +99,7 @@ func (self RepackFunction) Call(ctx context.Context,
 	}
 
 	exe_bytes, err := readExeFile(ctx, config_obj, scope,
-		arg.Exe, arg.Accessor, arg.Target)
+		arg.Exe, arg.Accessor, arg.Target, arg.Version)
 	if err != nil {
 		scope.Log("ERROR:client_repack: %v", err)
 		return vfilter.Null{}
@@ -109,6 +110,9 @@ func (self RepackFunction) Call(ctx context.Context,
 		return RepackMSI(ctx, scope, arg.UploadName,
 			exe_bytes, []byte(arg.Config))
 	}
+
+	scope.Log("client_repack: Will Repack the Velociraptor binary with %v bytes of config",
+		len(arg.Config))
 
 	// Compress the string.
 	var b bytes.Buffer
@@ -157,7 +161,12 @@ func (self RepackFunction) Call(ctx context.Context,
 	sub_scope.AppendVars(
 		ordereddict.NewDict().Set("PACKED_Binary", exe_bytes))
 
-	return (&networking.UploadFunction{}).Call(
+	upload_func, ok := scope.GetFunction("upload")
+	if !ok {
+		return vfilter.Null{}
+	}
+
+	return upload_func.Call(
 		ctx, sub_scope, ordereddict.NewDict().
 			Set("file", "PACKED_Binary").
 			Set("name", arg.UploadName).
@@ -170,7 +179,7 @@ func readExeFile(
 	scope vfilter.Scope,
 	exe *accessors.OSPath,
 	accessor_name string,
-	target_tool string) ([]byte, error) {
+	target_tool, version string) ([]byte, error) {
 
 	if exe != nil {
 		accessor, err := accessors.GetAccessor(accessor_name, scope)
@@ -193,15 +202,8 @@ func readExeFile(
 		return nil, err
 	}
 
-	tool, err := inventory.GetToolInfo(ctx, config_obj, target_tool)
-	if err != nil {
-		return nil, err
-	}
-
-	// Find the actual tool from the filestore. NOTE: Tools are stored
-	// in a central location in the root org that gets served to all
-	// orgs.
-	org_manager, err := services.GetOrgManager()
+	tool, err := inventory.GetToolInfo(
+		ctx, config_obj, target_tool, version)
 	if err != nil {
 		return nil, err
 	}
@@ -209,10 +211,12 @@ func readExeFile(
 	// The path is determined by the org specific inventory manager,
 	// but must be opened using the root orgs filestore.
 	path_manager := paths.NewInventoryPathManager(config_obj, tool)
+	pathspec, file_store_factory, err := path_manager.Path()
+	if err != nil {
+		return nil, err
+	}
 
-	root_config_obj, _ := org_manager.GetOrgConfig("root")
-	root_file_store_factory := file_store.GetFileStore(root_config_obj)
-	fd, err := root_file_store_factory.ReadFile(path_manager.Path())
+	fd, err := file_store_factory.ReadFile(pathspec)
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +245,8 @@ func RepackMSI(
 	ctx context.Context,
 	scope vfilter.Scope, upload_name string,
 	data []byte, config_data []byte) vfilter.Any {
-	scope.Log("client_repack: Will Repack an MSI file with %v bytes", len(config_data))
+	scope.Log("client_repack: Will Repack an MSI file with %v bytes of config",
+		len(config_data))
 
 	// Make sure the config_data is at least big enough so we get to
 	// the comment section of the placeholder.
@@ -273,7 +278,12 @@ func RepackMSI(
 	sub_scope.AppendVars(
 		ordereddict.NewDict().Set("PACKED_MSI", data))
 
-	return (&networking.UploadFunction{}).Call(
+	upload_func, ok := scope.GetFunction("upload")
+	if !ok {
+		return vfilter.Null{}
+	}
+
+	return upload_func.Call(
 		ctx, sub_scope, ordereddict.NewDict().
 			Set("file", "PACKED_MSI").
 			Set("name", upload_name).
@@ -285,13 +295,6 @@ func AppendBinaries(
 	config_obj *config_proto.Config,
 	scope vfilter.Scope,
 	exe_bytes []byte, binaries []string) ([]byte, error) {
-
-	org_manager, err := services.GetOrgManager()
-	if err != nil {
-		return nil, err
-	}
-
-	root_config_obj, _ := org_manager.GetOrgConfig("root")
 
 	// Build the zip file that contains all the binaries.
 	csv_file := &bytes.Buffer{}
@@ -306,16 +309,29 @@ func AppendBinaries(
 		return nil, err
 	}
 
-	file_store_factory := file_store.GetFileStore(root_config_obj)
 	for _, name := range binaries {
-		tool, err := inventory.GetToolInfo(ctx, config_obj, name)
+		parts := strings.SplitN(name, ":", 2)
+		version := ""
+		if len(parts) > 1 {
+			name = parts[0]
+			version = parts[1]
+		}
+
+		tool, err := inventory.GetToolInfo(ctx, config_obj, name, version)
 		if err != nil {
 			return nil, err
 		}
 
+		scope.Log("Adding binary %v", tool.Name)
+
 		// Try to open the tool directly from the filestore
 		path_manager := paths.NewInventoryPathManager(config_obj, tool)
-		fd, err := file_store_factory.ReadFile(path_manager.Path())
+		pathspec, file_store_factory, err := path_manager.Path()
+		if err != nil {
+			return nil, err
+		}
+
+		fd, err := file_store_factory.ReadFile(pathspec)
 		if err != nil {
 			return nil, err
 		}
@@ -387,9 +403,10 @@ func appendPayload(exe_bytes []byte, payload []byte) []byte {
 
 func (self RepackFunction) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) *vfilter.FunctionInfo {
 	return &vfilter.FunctionInfo{
-		Name:    "repack",
-		Doc:     "Repack and upload a repacked binary or MSI to the server.",
-		ArgType: type_map.AddType(scope, &RepackFunctionArgs{}),
+		Name:     "repack",
+		Doc:      "Repack and upload a repacked binary or MSI to the server.",
+		ArgType:  type_map.AddType(scope, &RepackFunctionArgs{}),
+		Metadata: vql.VQLMetadata().Permissions(acls.COLLECT_SERVER).Build(),
 	}
 }
 

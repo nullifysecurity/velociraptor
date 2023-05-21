@@ -22,12 +22,12 @@ require (
 	github.com/alecthomas/assert v1.0.0
 	github.com/alecthomas/chroma v0.7.3
 	github.com/alecthomas/participle v0.7.1
-	github.com/alecthomas/repr v0.2.0 // indirect
+	github.com/alecthomas/repr v0.2.1-0.20230322203820-fba37eeb3a59 // indirect
 	github.com/alexmullins/zip v0.0.0-20180717182244-4affb64b04d0
 	github.com/araddon/dateparse v0.0.0-20210429162001-6b43995a97de
 	github.com/aws/aws-sdk-go v1.44.118
 	github.com/clbanning/mxj v1.8.4
-	github.com/crewjam/saml v0.4.8
+	github.com/crewjam/saml v0.4.13
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
 	github.com/dimchansky/utfbom v1.1.1
 	github.com/dustin/go-humanize v1.0.0
@@ -76,15 +76,14 @@ require (
 	github.com/sirupsen/logrus v1.8.1
 	github.com/stretchr/testify v1.8.1
 	github.com/tink-ab/tempfile v0.0.0-20180226111222-33beb0518f1a
-	github.com/vjeantet/grok v1.0.0
 	github.com/xor-gate/ar v0.0.0-20170530204233-5c72ae81e2b7 // indirect
 	github.com/xor-gate/debpkg v1.0.0
 	go.starlark.net v0.0.0-20221010140840-6bf6f0955179
-	golang.org/x/crypto v0.0.0-20221012134737-56aed061732a
+	golang.org/x/crypto v0.9.0
 	golang.org/x/mod v0.8.0
-	golang.org/x/net v0.7.0
-	golang.org/x/sys v0.5.0
-	golang.org/x/text v0.8.0 // indirect
+	golang.org/x/net v0.10.0
+	golang.org/x/sys v0.8.0
+	golang.org/x/text v0.9.0 // indirect
 	golang.org/x/time v0.0.0-20220609170525-579cf78fd858
 	google.golang.org/api v0.96.0
 	google.golang.org/genproto v0.0.0-20221018160656-63c7b68cfc55
@@ -98,18 +97,20 @@ require (
 	howett.net/plist v1.0.0
 	www.velocidex.com/golang/evtx v0.2.1-0.20220404133451-1fdf8be7325e
 	www.velocidex.com/golang/go-ese v0.1.1-0.20220107095505-c38622559671
-	www.velocidex.com/golang/go-ntfs v0.1.2-0.20230221030709-f91b68ac3222
+	www.velocidex.com/golang/go-ntfs v0.1.2-0.20230508135129-d367f954db15
 	www.velocidex.com/golang/go-pe v0.1.1-0.20230228112150-ef2eadf34bc3
 	www.velocidex.com/golang/go-prefetch v0.0.0-20220801101854-338dbe61982a
 	www.velocidex.com/golang/oleparse v0.0.0-20230217092320-383a0121aafe
 	www.velocidex.com/golang/regparser v0.0.0-20221020153526-bbc758cbd18b
-	www.velocidex.com/golang/vfilter v0.0.0-20230309171307-e8de2383d93b
+	www.velocidex.com/golang/vfilter v0.0.0-20230425012353-b6d0a982ca34
 )
 
 require (
 	github.com/AlecAivazis/survey/v2 v2.3.6
+	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.0.0
 	github.com/Masterminds/sprig/v3 v3.2.2
 	github.com/Velocidex/file-rotatelogs v0.0.0-20211221020724-d12e4dae4e11
+	github.com/Velocidex/grok v0.0.1
 	github.com/Velocidex/ordereddict v0.0.0-20221110130714-6a7cb85851cd
 	github.com/andybalholm/brotli v1.0.4
 	github.com/clayscode/Go-Splunk-HTTP/splunk/v2 v2.0.1-0.20221027171526-76a36be4fa02
@@ -117,8 +118,10 @@ require (
 	github.com/evanphx/json-patch/v5 v5.6.0
 	github.com/glaslos/tlsh v0.2.0
 	github.com/go-errors/errors v1.4.2
-	github.com/golang-jwt/jwt/v4 v4.4.2
+	github.com/golang-jwt/jwt/v4 v4.4.3
+	github.com/golang/protobuf v1.5.2
 	github.com/hillu/go-archive-zip-crypto v0.0.0-20200712202847-bd5cf365dd44
+	github.com/hirochachacha/go-smb2 v1.1.0
 	github.com/lpar/gzipped v1.1.0
 	github.com/pkg/errors v0.9.1
 	github.com/rogpeppe/go-internal v1.9.0
@@ -126,6 +129,7 @@ require (
 	github.com/valyala/fastjson v1.6.3
 	golang.org/x/oauth2 v0.0.0-20221014153046-6fdb5e3db783
 	google.golang.org/grpc/cmd/protoc-gen-go-grpc v1.2.0
+	software.sslmate.com/src/go-pkcs12 v0.2.0
 	www.velocidex.com/golang/vtypes v0.0.0-20220816192452-6a27ae078f12
 )
 
@@ -134,6 +138,8 @@ require (
 	cloud.google.com/go/compute v1.10.0 // indirect
 	cloud.google.com/go/iam v0.4.0 // indirect
 	github.com/360EntSecGroup-Skylar/excelize v1.4.1 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.3.0 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/internal v1.1.1 // indirect
 	github.com/Masterminds/semver/v3 v3.1.1 // indirect
 	github.com/PuerkitoBio/goquery v1.8.0 // indirect
 	github.com/alecthomas/colour v0.1.0 // indirect
@@ -149,9 +155,9 @@ require (
 	github.com/danwakefield/fnmatch v0.0.0-20160403171240-cbb64ac3d964 // indirect
 	github.com/dlclark/regexp2 v1.7.0 // indirect
 	github.com/dustmop/soup v1.1.2-0.20190516214245-38228baa104e // indirect
+	github.com/geoffgarside/ber v1.1.0 // indirect
 	github.com/golang/gddo v0.0.0-20210115222349-20d68f94ee1f // indirect
 	github.com/golang/glog v1.0.0 // indirect
-	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/google/go-cmp v0.5.9 // indirect
 	github.com/google/martian/v3 v3.3.2 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.2.0 // indirect
@@ -179,7 +185,7 @@ require (
 	github.com/prometheus/common v0.37.0 // indirect
 	github.com/prometheus/procfs v0.7.3 // indirect
 	github.com/rivo/uniseg v0.4.2 // indirect
-	github.com/russellhaering/goxmldsig v1.2.0 // indirect
+	github.com/russellhaering/goxmldsig v1.3.0 // indirect
 	github.com/shopspring/decimal v1.2.0 // indirect
 	github.com/spf13/cast v1.3.1 // indirect
 	github.com/tklauser/go-sysconf v0.3.9 // indirect
@@ -189,7 +195,7 @@ require (
 	go.opencensus.io v0.23.0 // indirect
 	go.uber.org/goleak v1.2.0 // indirect
 	golang.org/x/sync v0.1.0 // indirect
-	golang.org/x/term v0.5.0 // indirect
+	golang.org/x/term v0.8.0 // indirect
 	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
@@ -197,6 +203,7 @@ require (
 	www.velocidex.com/golang/binparsergen v0.1.1-0.20220107080050-ae6122c5ed14 // indirect
 )
 
+// replace github.com/Velocidex/grok => /home/mic/projects/grok
 // replace www.velocidex.com/golang/vfilter => /home/mic/projects/vfilter
 // replace www.velocidex.com/golang/regparser => /home/mic/projects/regparser
 // replace www.velocidex.com/golang/go-ntfs => /home/mic/projects/go-ntfs
@@ -228,8 +235,5 @@ go 1.18
 
 // Needed for syntax highlighting VQL. Removes extra fat.
 replace github.com/alecthomas/chroma => github.com/Velocidex/chroma v0.6.8-0.20200418131129-82edc291369c
-
-// Fix broken version issue.
-replace github.com/crewjam/saml v0.4.8 => github.com/Velocidex/saml v0.0.0-20221019055034-272f55e26c8d
 
 replace github.com/go-errors/errors => github.com/Velocidex/errors v0.0.0-20221019164655-9ace6bf61e26

@@ -4,13 +4,13 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/Velocidex/ordereddict"
 	"github.com/gorilla/csrf"
-	"github.com/sirupsen/logrus"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
+	utils "www.velocidex.com/golang/velociraptor/api/utils"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/constants"
 	"www.velocidex.com/golang/velociraptor/json"
-	"www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/services/users"
 )
@@ -27,8 +27,7 @@ func (self *BasicAuthenticator) AddHandlers(mux *http.ServeMux) error {
 }
 
 func (self *BasicAuthenticator) AddLogoff(mux *http.ServeMux) error {
-	homepage := self.base + "app/index.html"
-	mux.Handle(self.base+"app/logoff.html",
+	mux.Handle(utils.Join(self.base, "/app/logoff.html"),
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			username, _, ok := r.BasicAuth()
 			if !ok {
@@ -42,7 +41,8 @@ func (self *BasicAuthenticator) AddLogoff(mux *http.ServeMux) error {
 			old_username, ok := params["username"]
 			if ok && len(old_username) == 1 && old_username[0] != username {
 				// Authenticated as someone else.
-				http.Redirect(w, r, homepage, http.StatusTemporaryRedirect)
+				http.Redirect(w, r, utils.Homepage(self.config_obj),
+					http.StatusTemporaryRedirect)
 				return
 			}
 
@@ -54,6 +54,10 @@ func (self *BasicAuthenticator) AddLogoff(mux *http.ServeMux) error {
 }
 
 func (self *BasicAuthenticator) IsPasswordLess() bool {
+	return false
+}
+
+func (self *BasicAuthenticator) RequireClientCerts() bool {
 	return false
 }
 
@@ -78,22 +82,23 @@ func (self *BasicAuthenticator) AuthenticateUserHandler(
 		users_manager := services.GetUserManager()
 		user_record, err := users_manager.GetUserWithHashes(r.Context(), username)
 		if err != nil || user_record.Name != username {
-			logging.LogAudit(self.config_obj, username, "Unknown username",
-				logrus.Fields{
-					"remote": r.RemoteAddr,
-					"status": http.StatusUnauthorized,
-				})
+			services.LogAudit(r.Context(),
+				self.config_obj, username, "Unknown username",
+				ordereddict.NewDict().
+					Set("remote", r.RemoteAddr).
+					Set("status", http.StatusUnauthorized))
 
 			http.Error(w, "authorization failed", http.StatusUnauthorized)
 			return
 		}
 
 		if !users.VerifyPassword(user_record, password) {
-			logging.LogAudit(self.config_obj, username, "Invalid password",
-				logrus.Fields{
-					"remote": r.RemoteAddr,
-					"status": http.StatusUnauthorized,
-				})
+			services.LogAudit(r.Context(),
+				self.config_obj, username, "Invalid password",
+				ordereddict.NewDict().
+					Set("remote", r.RemoteAddr).
+					Set("status", http.StatusUnauthorized))
+
 			http.Error(w, "authorization failed", http.StatusUnauthorized)
 			return
 		}
@@ -101,11 +106,11 @@ func (self *BasicAuthenticator) AuthenticateUserHandler(
 		// Does the user have access to the specified org?
 		err = CheckOrgAccess(r, user_record)
 		if err != nil {
-			logging.LogAudit(self.config_obj, username, "Unauthorized username",
-				logrus.Fields{
-					"remote": r.RemoteAddr,
-					"status": http.StatusUnauthorized,
-				})
+			services.LogAudit(r.Context(),
+				self.config_obj, username, "Unauthorized username",
+				ordereddict.NewDict().
+					Set("remote", r.RemoteAddr).
+					Set("status", http.StatusUnauthorized))
 
 			http.Error(w, "authorization failed", http.StatusUnauthorized)
 			return

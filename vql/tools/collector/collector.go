@@ -19,6 +19,7 @@ import (
 	"www.velocidex.com/golang/velociraptor/reporting"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/utils"
+	"www.velocidex.com/golang/velociraptor/vql"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/velociraptor/vql/functions"
 	"www.velocidex.com/golang/vfilter"
@@ -156,10 +157,10 @@ func (self CollectPlugin) configureCollection(
 
 func (self CollectPlugin) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) *vfilter.PluginInfo {
 	return &vfilter.PluginInfo{
-		Name: "collect",
-		Doc:  "Collect artifacts into a local file.",
-		ArgType: type_map.AddType(scope,
-			&CollectPluginArgs{}),
+		Name:     "collect",
+		Doc:      "Collect artifacts into a local file.",
+		ArgType:  type_map.AddType(scope, &CollectPluginArgs{}),
+		Metadata: vql.VQLMetadata().Permissions(acls.FILESYSTEM_WRITE).Build(),
 	}
 }
 
@@ -236,7 +237,7 @@ func AddSpecProtobuf(
 		artifact_definitions, pres := repository.Get(ctx, config_obj, name)
 		if !pres {
 			// Artifact not known
-			return fmt.Errorf(`Parameter 'args' refers to an unknown artifact (%v). The 'args' parameter should be of the form {"Custom.Artifact.Name":{"arg":"value"}}`, name)
+			return fmt.Errorf(`Parameter refers to an unknown artifact (%v). The parameter should be of the form {"Custom.Artifact.Name":{"arg":"value"}}`, name)
 		}
 
 		// Check that we are allowed to collect this artifact

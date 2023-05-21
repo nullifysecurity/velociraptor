@@ -23,7 +23,7 @@ import (
 )
 
 var (
-	VERSION = "0.6.8-rc3"
+	VERSION = "0.6.9-rc1"
 )
 
 const (
@@ -52,15 +52,16 @@ const (
 	USER_AGENT = "Velociraptor - Dig Deeper!"
 
 	// Globals set in VQL scopes.
-	SCOPE_CONFIG         = "config"
-	SCOPE_SERVER_CONFIG  = "server_config"
-	SCOPE_THROTTLE       = "$throttle"
-	SCOPE_UPLOADER       = "$uploader"
-	SCOPE_RESPONDER      = "$responder"
-	SCOPE_MOCK           = "$mock"
-	SCOPE_ROOT           = "$root"
-	SCOPE_STACK          = "$stack"
-	SCOPE_DEVICE_MANAGER = "$device_manager"
+	SCOPE_CONFIG            = "config"
+	SCOPE_SERVER_CONFIG     = "server_config"
+	SCOPE_THROTTLE          = "$throttle"
+	SCOPE_UPLOADER          = "$uploader"
+	SCOPE_RESPONDER         = "$responder"
+	SCOPE_MOCK              = "$mock"
+	SCOPE_ROOT              = "$root"
+	SCOPE_STACK             = "$stack"
+	SCOPE_DEVICE_MANAGER    = "$device_manager"
+	SCOPE_RESPONDER_CONTEXT = "_Context"
 
 	// Artifact names from packs should start with this
 	ARTIFACT_PACK_NAME_PREFIX   = "Packs."
@@ -114,6 +115,8 @@ const (
 	// * Moves processing requirements from server to the client -
 	//   reducing server load.
 	CLIENT_API_VERSION_0_6_8 = uint32(4)
+
+	DISABLE_DANGEROUS_API_CALLS = "DISABLE_DANGEROUS_API_CALLS"
 )
 
 type key int

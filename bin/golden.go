@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime/pprof"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -80,6 +81,7 @@ var (
 		"(?i)Symbol .+ not found",
 		"(?i)Field .+ Expecting a .+ arg type, not",
 		"(?i)Artifact .+ not found",
+		"PANIC runtime error:",
 	}
 )
 
@@ -259,6 +261,8 @@ func runTest(fixture *testFixture, sm *services.Service,
 }
 
 func doGolden() error {
+	logging.DisableLogging()
+
 	vql_subsystem.RegisterPlugin(&MemoryLogPlugin{})
 	vql_subsystem.RegisterFunction(&WriteFilestoreFunction{})
 	vql_subsystem.RegisterFunction(&MockTimeFunciton{})
@@ -300,13 +304,9 @@ func doGolden() error {
 		return err
 	}
 
-	err = filepath.Walk(*golden_command_directory, func(file_path string, info os.FileInfo, err error) error {
-		select {
-		case <-sm.Ctx.Done():
-			return errors.New("Cancelled!")
-		default:
-		}
+	var file_paths []string
 
+	err = filepath.Walk(*golden_command_directory, func(file_path string, info os.FileInfo, err error) error {
 		if *golden_command_filter != "" &&
 			!strings.HasPrefix(filepath.Base(file_path), *golden_command_filter) {
 			return nil
@@ -314,6 +314,21 @@ func doGolden() error {
 
 		if !strings.HasSuffix(file_path, ".in.yaml") {
 			return nil
+		}
+
+		file_paths = append(file_paths, file_path)
+		return nil
+	})
+
+	// Run the test cases in a predictable way
+	sort.Strings(file_paths)
+	logger.Info("<green>Testing %v test cases</>", len(file_paths))
+
+	for _, file_path := range file_paths {
+		select {
+		case <-sm.Ctx.Done():
+			return errors.New("Cancelled!")
+		default:
 		}
 
 		logger := log.New(os.Stderr, "golden: ", 0)
@@ -362,8 +377,7 @@ func doGolden() error {
 				return fmt.Errorf("Unable to write golden file: %w", err)
 			}
 		}
-		return nil
-	})
+	}
 
 	if err != nil {
 		return fmt.Errorf("golden error FAIL: %w", err)

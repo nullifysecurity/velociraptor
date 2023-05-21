@@ -188,7 +188,7 @@ func getCellsForEvents(ctx context.Context,
 LET StartTime <= "%s"
 LET EndTime <= "%s"
 
-SELECT *, timestamp(epoch=_ts) AS ServerTime
+SELECT timestamp(epoch=_ts) AS ServerTime, *
  FROM source(start_time=StartTime, end_time=EndTime)
 LIMIT 50
 `, artifact_name, start_time, end_time),
@@ -287,7 +287,7 @@ LET ColumnTypes <= dict(
 /*
 # Flows with ERROR status
 */
-SELECT ClientId,
+LET ERRORS = SELECT ClientId,
        client_info(client_id=ClientId).os_info.hostname AS Hostname,
        FlowId, Flow.start_time As StartedTime,
        Flow.state AS FlowState, Flow.status as FlowStatus,
@@ -296,6 +296,18 @@ SELECT ClientId,
        Flow.total_collected_rows as TotalRows
 FROM hunt_flows(hunt_id=HuntId)
 WHERE FlowState =~ 'ERROR'
+
+-- Uncomment the below to reissue the exact same hunt to the errored clients
+-- SELECT *,
+--    hunt_add(client_id=ClientId, hunt_id=HuntId, relaunch=TRUE) AS NewCollection
+-- FROM ERRORS
+
+-- Uncomment the below to reissue a new collection and add to the same hunt
+-- SELECT *,
+--   hunt_add(client_id=ClientId, hunt_id=HuntId,
+--     flow_id=collect_client(artifacts="UpdateArtifactName").flow_id) AS NewCollection
+-- FROM ERRORS
+SELECT * FROM ERRORS
 
 /*
 ## Flows with RUNNING status
@@ -339,7 +351,7 @@ func getCellsForFlow(ctx context.Context,
 	}
 
 	flow_details, err := launcher.GetFlowDetails(
-		config_obj, client_id, flow_id)
+		ctx, config_obj, client_id, flow_id)
 	if err != nil {
 		return nil
 	}

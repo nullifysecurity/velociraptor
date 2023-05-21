@@ -1,32 +1,31 @@
 /*
-   Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+Velociraptor - Dig Deeper
+Copyright (C) 2019-2022 Rapid7 Inc.
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published
-   by the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package networking
 
 import (
 	"context"
-	"crypto/tls"
-	"net/http"
 	"time"
 
 	"github.com/Velocidex/ordereddict"
 	gomail "gopkg.in/gomail.v2"
 	"www.velocidex.com/golang/velociraptor/acls"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
+	"www.velocidex.com/golang/velociraptor/vql"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	vfilter "www.velocidex.com/golang/vfilter"
 	"www.velocidex.com/golang/vfilter/arg_parser"
@@ -183,14 +182,18 @@ func (self MailFunction) Call(ctx context.Context,
 
 	// Skip verification of the TLS connection
 	if arg.SkipVerify || mail_config.SkipVerify {
-		d.TLSConfig = &tls.Config{InsecureSkipVerify: true}
+		d.TLSConfig, err = GetSkipVerifyTlsConfig(config_obj.GetClient())
+		if err != nil {
+			scope.Log("mail: could not get SkipVerify enabled TLS config: %s", err)
+			return &vfilter.Null{}
+		}
 
 	} else if config_obj.Client != nil {
 		// Try to use our standard methods for getting TLS config up
-		http_client, err := GetDefaultHTTPClient(
-			config_obj.Client, arg.RootCerts, EmptyCookieJar)
-		if err == nil {
-			d.TLSConfig = http_client.Transport.(*http.Transport).TLSClientConfig
+		d.TLSConfig, err = GetTlsConfig(config_obj.Client, arg.RootCerts)
+		if err != nil {
+			scope.Log("mail: could not get TLS config: %s", err)
+			return &vfilter.Null{}
 		}
 	}
 
@@ -209,9 +212,10 @@ func (self MailFunction) Call(ctx context.Context,
 
 func (self MailFunction) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) *vfilter.FunctionInfo {
 	return &vfilter.FunctionInfo{
-		Name:    "mail",
-		Doc:     "Send Email to a remote server.",
-		ArgType: type_map.AddType(scope, &MailPluginArgs{}),
+		Name:     "mail",
+		Doc:      "Send Email to a remote server.",
+		ArgType:  type_map.AddType(scope, &MailPluginArgs{}),
+		Metadata: vql.VQLMetadata().Permissions(acls.SERVER_ADMIN).Build(),
 	}
 }
 

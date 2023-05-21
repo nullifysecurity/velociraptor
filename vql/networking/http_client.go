@@ -1,30 +1,28 @@
 /*
-   Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+Velociraptor - Dig Deeper
+Copyright (C) 2019-2022 Rapid7 Inc.
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published
-   by the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package networking
 
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
@@ -39,8 +37,8 @@ import (
 	"www.velocidex.com/golang/velociraptor/artifacts"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	constants "www.velocidex.com/golang/velociraptor/constants"
-	"www.velocidex.com/golang/velociraptor/crypto"
 	"www.velocidex.com/golang/velociraptor/utils"
+	"www.velocidex.com/golang/velociraptor/vql"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	vfilter "www.velocidex.com/golang/vfilter"
 	"www.velocidex.com/golang/vfilter/arg_parser"
@@ -52,6 +50,8 @@ var (
 
 	proxyHandler                     = http.ProxyFromEnvironment
 	EmptyCookieJar *ordereddict.Dict = nil
+
+	errSkipVerifyDenied = errors.New("SkipVerify not allowed due to TLS certificate verification policy")
 )
 
 const (
@@ -62,7 +62,7 @@ const (
 // Cache http clients in the scope to allow reuse.
 type HTTPClientCache struct {
 	mu    sync.Mutex
-	cache map[string]*http.Client
+	cache map[string]HTTPClient
 }
 
 func (self *HTTPClientCache) getCacheKey(url *url.URL) string {
@@ -78,7 +78,8 @@ type HttpPluginRequest struct {
 	Chunk   int         `vfilter:"optional,field=chunk_size,doc=Read input with this chunk size and send each chunk as a row"`
 
 	// Sometimes it is useful to be able to query misconfigured hosts.
-	DisableSSLSecurity bool              `vfilter:"optional,field=disable_ssl_security,doc=Disable ssl certificate verifications."`
+	DisableSSLSecurity bool              `vfilter:"optional,field=disable_ssl_security,doc=Disable ssl certificate verifications (deprecated in favor of SkipVerify)."`
+	SkipVerify         bool              `vfilter:"optional,field=skip_verify,doc=Disable ssl certificate verifications."`
 	TempfileExtension  string            `vfilter:"optional,field=tempfile_extension,doc=If specified we write to a tempfile. The content field will contain the full path to the tempfile."`
 	RemoveLast         bool              `vfilter:"optional,field=remove_last,doc=If set we delay removal as much as possible."`
 	RootCerts          string            `vfilter:"optional,field=root_ca,doc=As a better alternative to disable_ssl_security, allows root ca certs to be added here."`
@@ -96,22 +97,25 @@ type _HttpPlugin struct{}
 
 // Get a potentially cached http client.
 func GetHttpClient(
+	ctx context.Context,
 	config_obj *config_proto.ClientConfig,
 	scope vfilter.Scope,
-	arg *HttpPluginRequest) (*http.Client, error) {
+	arg *HttpPluginRequest) (HTTPClient, error) {
 
 	cache, pres := vql_subsystem.CacheGet(scope, HTTP_TAG).(*HTTPClientCache)
 	if !pres {
-		cache = &HTTPClientCache{cache: make(map[string]*http.Client)}
+		cache = &HTTPClientCache{cache: make(map[string]HTTPClient)}
 	}
 	defer vql_subsystem.CacheSet(scope, HTTP_TAG, cache)
 
-	return cache.GetHttpClient(config_obj, arg)
+	return cache.GetHttpClient(ctx, config_obj, arg, scope)
 }
 
 func (self *HTTPClientCache) GetHttpClient(
+	ctx context.Context,
 	config_obj *config_proto.ClientConfig,
-	arg *HttpPluginRequest) (*http.Client, error) {
+	arg *HttpPluginRequest,
+	scope vfilter.Scope) (HTTPClient, error) {
 
 	self.mu.Lock()
 	defer self.mu.Unlock()
@@ -137,17 +141,21 @@ func (self *HTTPClientCache) GetHttpClient(
 		}
 		arg.Url = "http://unix" + components[1]
 
-		result = &http.Client{
-			Timeout: time.Second * 10000,
-			Transport: &http.Transport{
-				MaxIdleConnsPerHost: 10,
-				DialContext: func(_ context.Context, _, _ string) (
-					net.Conn, error) {
-					return net.Dial("unix", components[0])
+		result = &httpClientWrapper{
+			Client: http.Client{
+				Timeout: time.Second * 10000,
+				Transport: &http.Transport{
+					MaxIdleConnsPerHost: 10,
+					DialContext: func(_ context.Context, _, _ string) (
+						net.Conn, error) {
+						return net.Dial("unix", components[0])
+					},
+					TLSNextProto: make(map[string]func(
+						authority string, c *tls.Conn) http.RoundTripper),
 				},
-				TLSNextProto: make(map[string]func(
-					authority string, c *tls.Conn) http.RoundTripper),
 			},
+			ctx:   ctx,
+			scope: scope,
 		}
 		self.cache[key] = result
 		return result, nil
@@ -156,25 +164,35 @@ func (self *HTTPClientCache) GetHttpClient(
 	// Create a http client without TLS security - this is sometimes
 	// needed to access self signed servers. Ideally we should
 	// add extra ca certs in arg.RootCerts.
-	if arg.DisableSSLSecurity {
-		transport := http.DefaultTransport.(*http.Transport).Clone()
-		transport.Proxy = proxyHandler
-		transport.MaxIdleConns = 10
-		transport.TLSClientConfig = &tls.Config{
-			InsecureSkipVerify: true,
+	if arg.DisableSSLSecurity || arg.SkipVerify {
+		if arg.DisableSSLSecurity {
+			scope.Log("http_client: DisableSSLSecurity is deprecated, please use SkipVerify instead")
 		}
 
-		result = &http.Client{
-			Timeout:   time.Second * 10000,
-			Jar:       NewDictJar(arg.CookieJar),
-			Transport: transport,
+		transport, err := GetHttpTransport(config_obj, "")
+		if err != nil {
+			return nil, err
+		}
+
+		if err = EnableSkipVerify(transport.TLSClientConfig, config_obj); err != nil {
+			return nil, err
+		}
+
+		result = &httpClientWrapper{
+			Client: http.Client{
+				Timeout:   time.Second * 10000,
+				Jar:       NewDictJar(arg.CookieJar),
+				Transport: transport,
+			},
+			ctx:   ctx,
+			scope: scope,
 		}
 		self.cache[key] = result
 		return result, nil
 	}
 
-	result, err = GetDefaultHTTPClient(
-		config_obj, arg.RootCerts, arg.CookieJar)
+	result, err = GetDefaultHTTPClient(ctx,
+		config_obj, scope, arg.RootCerts, arg.CookieJar)
 	if err != nil {
 		return nil, err
 	}
@@ -183,127 +201,27 @@ func (self *HTTPClientCache) GetHttpClient(
 	return result, nil
 }
 
-// If we deployed Velociraptor using self signed certificates we want
-// to be able to trust our own server. Our own server is signed by our
-// own CA and also may have a different common name (not related to
-// DNS). For example, in self signed mode, the server certificate is
-// signed for VelociraptorServer but may be served over
-// "localhost". Using the default TLS configuration this connection
-// will be rejected.
-
-// Therefore in the special case where the server cert is signed by
-// our own CA, and the Subject name is the pinned server name
-// (VelociraptorServer), we do not need to compare the server's common
-// name with the url.
-
-// This function is based on
-// https://go.dev/src/crypto/tls/handshake_client.go::verifyServerCertificate
-func customVerifyConnection(
-	CA_Pool *x509.CertPool,
-	config_obj *config_proto.ClientConfig) func(conn tls.ConnectionState) error {
-
-	// Check if the cert was signed by the Velociraptor CA
-	private_opts := x509.VerifyOptions{
-		CurrentTime:   time.Now(),
-		Intermediates: x509.NewCertPool(),
-		Roots:         x509.NewCertPool(),
-	}
-	if config_obj != nil {
-		private_opts.Roots.AppendCertsFromPEM([]byte(config_obj.CaCertificate))
-	}
-
-	return func(conn tls.ConnectionState) error {
-		// Used to verify certs using public roots
-		public_opts := x509.VerifyOptions{
-			CurrentTime:   time.Now(),
-			Intermediates: x509.NewCertPool(),
-			DNSName:       conn.ServerName,
-			Roots:         CA_Pool,
-		}
-
-		// First parse all the server certs so we can verify them. The
-		// server presents its main cert first, then any following
-		// intermediates.
-		var server_cert *x509.Certificate
-
-		for i, cert := range conn.PeerCertificates {
-			// First cert is server cert.
-			if i == 0 {
-				server_cert = cert
-
-				// Velociraptor does not allow intermediates so this
-				// should be sufficient to verify that the
-				// Velociraptor CA signed it.
-				_, err := server_cert.Verify(private_opts)
-				if err == nil {
-					// The Velociraptor CA signed it - we disregard
-					// the DNS name and allow it.
-					return nil
-				}
-
-			} else {
-				public_opts.Intermediates.AddCert(cert)
-			}
-		}
-
-		if server_cert == nil {
-			return errors.New("Unknown server cert")
-		}
-
-		// Perform normal verification.
-		_, err := server_cert.Verify(public_opts)
-		return err
-	}
-}
-
 func GetDefaultHTTPClient(
+	ctx context.Context,
 	config_obj *config_proto.ClientConfig,
+	scope vfilter.Scope,
 	extra_roots string,
-	cookie_jar *ordereddict.Dict) (*http.Client, error) {
+	cookie_jar *ordereddict.Dict) (HTTPClient, error) {
 
-	CA_Pool := x509.NewCertPool()
-	if config_obj != nil {
-		err := crypto.AddDefaultCerts(config_obj, CA_Pool)
-		if err != nil {
-			return nil, err
-		}
+	transport, err := GetHttpTransport(config_obj, extra_roots)
+	if err != nil {
+		return nil, err
 	}
 
-	// Allow access to public servers.
-	crypto.AddPublicRoots(CA_Pool)
-
-	if extra_roots != "" {
-		if !CA_Pool.AppendCertsFromPEM([]byte(extra_roots)) {
-			return nil, errors.New("Unable to parse root CA")
-		}
-	}
-
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = &tls.Config{
-		MinVersion:         tls.VersionTLS12,
-		ClientSessionCache: tls.NewLRUClientSessionCache(100),
-		RootCAs:            CA_Pool,
-
-		// Not actually skipping, we check the
-		// cert in VerifyPeerCertificate
-		InsecureSkipVerify: true,
-		NextProtos:         []string{"http/1.1"},
-		VerifyConnection:   customVerifyConnection(CA_Pool, config_obj),
-	}
-	transport.Proxy = proxyHandler
-	transport.Dial = (&net.Dialer{
-		KeepAlive: 600 * time.Second,
-	}).Dial
-	transport.MaxIdleConnsPerHost = 10
-	transport.MaxIdleConns = 10
-
-	result := &http.Client{
-		Timeout:   time.Second * 10000,
-		Jar:       NewDictJar(cookie_jar),
-		Transport: transport,
-	}
-
-	return result, nil
+	return &httpClientWrapper{
+		Client: http.Client{
+			Timeout:   time.Second * 10000,
+			Jar:       NewDictJar(cookie_jar),
+			Transport: transport,
+		},
+		ctx:   ctx,
+		scope: scope,
+	}, nil
 }
 
 func encodeParams(arg *HttpPluginRequest, scope vfilter.Scope) *url.Values {
@@ -377,7 +295,7 @@ func (self *_HttpPlugin) Call(
 		}
 
 		config_obj, _ := artifacts.GetConfig(scope)
-		client, err := GetHttpClient(config_obj, scope, arg)
+		client, err := GetHttpClient(ctx, config_obj, scope, arg)
 		if err != nil {
 			scope.Log("http_client: %v", err)
 			return
@@ -467,8 +385,7 @@ func (self *_HttpPlugin) Call(
 		}
 
 		if arg.TempfileExtension != "" {
-
-			tmpfile, err := ioutil.TempFile("", "tmp*"+arg.TempfileExtension)
+			tmpfile, err := os.CreateTemp("", "tmp*"+arg.TempfileExtension)
 			if err != nil {
 				scope.Log("http_client: %v", err)
 				return
@@ -552,10 +469,11 @@ func (self _HttpPlugin) Name() string {
 
 func (self _HttpPlugin) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) *vfilter.PluginInfo {
 	return &vfilter.PluginInfo{
-		Name:    self.Name(),
-		Doc:     "Make a http request.",
-		ArgType: type_map.AddType(scope, &HttpPluginRequest{}),
-		Version: 2,
+		Name:     self.Name(),
+		Doc:      "Make a http request.",
+		ArgType:  type_map.AddType(scope, &HttpPluginRequest{}),
+		Version:  2,
+		Metadata: vql.VQLMetadata().Permissions(acls.COLLECT_SERVER).Build(),
 	}
 }
 
@@ -588,6 +506,23 @@ func GetProxy() func(*http.Request) (*url.URL, error) {
 	defer mu.Unlock()
 
 	return proxyHandler
+}
+
+// If the TLS Verification policy allows it, enable SkipVerify to
+// allow connections to invalid TLS servers.
+func EnableSkipVerifyHttp(client HTTPClient, config_obj *config_proto.ClientConfig) error {
+	http_client := client.(*httpClientWrapper)
+
+	if http_client == nil || http_client.Transport == nil {
+		return nil
+	}
+
+	t, ok := http_client.Transport.(*http.Transport)
+	if !ok {
+		return errors.New("http client does not have a compatible transport")
+	}
+
+	return EnableSkipVerify(t.TLSClientConfig, config_obj)
 }
 
 func init() {

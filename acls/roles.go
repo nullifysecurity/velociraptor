@@ -13,12 +13,14 @@ var (
 	ALL_ROLES = []string{"org_admin", "administrator", "reader",
 		"analyst", "investigator",
 		"artifact_writer", "api"}
+
 	ALL_PERMISSIONS = []string{
 		"ALL_QUERY",
 		"ANY_QUERY",
 		"READ_RESULTS",
 		"LABEL_CLIENT",
 		"COLLECT_CLIENT",
+		"START_HUNT",
 		"COLLECT_SERVER",
 		"ARTIFACT_WRITER",
 		"SERVER_ARTIFACT_WRITER",
@@ -31,6 +33,7 @@ var (
 		"FILESYSTEM_WRITE",
 		"MACHINE_STATE",
 		"PREPARE_RESULTS",
+		"DELETE_RESULTS",
 		"DATASTORE_ACCESS",
 	}
 )
@@ -55,6 +58,9 @@ func DescribePermissions(token *acl_proto.ApiClientACL) []string {
 	}
 	if token.CollectClient {
 		result = append(result, "COLLECT_CLIENT")
+	}
+	if token.StartHunt {
+		result = append(result, "START_HUNT")
 	}
 	if token.CollectServer {
 		result = append(result, "COLLECT_SERVER")
@@ -96,6 +102,10 @@ func DescribePermissions(token *acl_proto.ApiClientACL) []string {
 		result = append(result, "PREPARE_RESULTS")
 	}
 
+	if token.DeleteResults {
+		result = append(result, "DELETE_RESULTS")
+	}
+
 	if token.DatastoreAccess {
 		result = append(result, "DATASTORE_ACCESS")
 	}
@@ -117,6 +127,8 @@ func SetTokenPermission(
 			token.LabelClients = true
 		case "COLLECT_CLIENT":
 			token.CollectClient = true
+		case "START_HUNT":
+			token.StartHunt = true
 		case "COLLECT_SERVER":
 			token.CollectServer = true
 		case "ARTIFACT_WRITER":
@@ -141,6 +153,8 @@ func SetTokenPermission(
 			token.MachineState = true
 		case "PREPARE_RESULTS":
 			token.PrepareResults = true
+		case "DELETE_RESULTS":
+			token.DeleteResults = true
 		case "DATASTORE_ACCESS":
 			token.DatastoreAccess = true
 
@@ -170,6 +184,7 @@ func GetRolePermissions(
 			result.Impersonation = true
 			result.LabelClients = true
 			result.CollectClient = true
+			result.StartHunt = true
 			result.CollectServer = true
 			result.ArtifactWriter = true
 			result.ServerArtifactWriter = true
@@ -180,6 +195,7 @@ func GetRolePermissions(
 			result.FilesystemWrite = true
 			result.MachineState = true
 			result.PrepareResults = true
+			result.DeleteResults = true
 
 			// An administrator for the root org is allowed to
 			// manipulate orgs.
@@ -215,6 +231,7 @@ func GetRolePermissions(
 			result.ReadResults = true
 			result.NotebookEditor = true
 			result.CollectClient = true
+			result.StartHunt = true
 			result.LabelClients = true
 			result.AnyQuery = true
 			result.PrepareResults = true

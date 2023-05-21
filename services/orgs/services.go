@@ -12,6 +12,7 @@ import (
 	"www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/services/acl_manager"
+	"www.velocidex.com/golang/velociraptor/services/audit_manager"
 	"www.velocidex.com/golang/velociraptor/services/broadcast"
 	"www.velocidex.com/golang/velociraptor/services/client_info"
 	"www.velocidex.com/golang/velociraptor/services/client_monitoring"
@@ -128,6 +129,10 @@ func (self *ServiceContainer) NotebookManager() (services.NotebookManager, error
 	}
 
 	return self.notebook_manager, nil
+}
+
+func (self *ServiceContainer) AuditManager() (services.AuditManager, error) {
+	return &audit_manager.AuditManager{}, nil
 }
 
 func (self *ServiceContainer) Launcher() (services.Launcher, error) {
@@ -429,27 +434,26 @@ func (self *OrgManager) startOrgFromContext(org_ctx *OrgContext) (err error) {
 			return err
 		}
 
-		err = repository.LoadArtifactsFromConfig(repo_manager, org_config)
-		if err != nil {
-			return err
-		}
-
 		// The Root org will contain all the built in artifacts
-		if org_id == "" {
-			// Assume the built in artifacts are OK so we dont need to
-			// validate them at runtime.
+		if utils.IsRootOrg(org_id) {
+			// These artifacts are compiled in.
 			err = repository.LoadBuiltInArtifacts(ctx, org_config,
-				repo_manager.(*repository.RepositoryManager),
-				!services.ValidateArtifact)
+				repo_manager.(*repository.RepositoryManager))
 			if err != nil {
 				return err
 			}
 
-			err = repository.LoadArtifactsFromConfig(
-				repo_manager.(*repository.RepositoryManager), org_config)
+			global_repository, err := repo_manager.GetGlobalRepository(org_config)
 			if err != nil {
 				return err
 			}
+
+			_, err = repository.InitializeGlobalRepositoryFromFilestore(
+				ctx, org_config, global_repository)
+			if err != nil {
+				return err
+			}
+
 		} else {
 			root_org_config, _ := self.GetOrgConfig("")
 			root_repo_manager, _ := self.Services("").RepositoryManager()
@@ -465,6 +469,13 @@ func (self *OrgManager) startOrgFromContext(org_ctx *OrgContext) (err error) {
 			if err != nil {
 				return err
 			}
+		}
+
+		// Load config artifacts last so they can override all the
+		// other artifacts.
+		err = repository.LoadArtifactsFromConfig(repo_manager, org_config)
+		if err != nil {
+			return err
 		}
 
 		service_container.mu.Lock()

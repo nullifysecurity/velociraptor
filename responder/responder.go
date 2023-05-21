@@ -133,8 +133,7 @@ func (self *FlowResponder) updateStats(message *crypto_proto.VeloMessage) {
 	}
 
 	if message.VQLResponse != nil {
-		self.status.ResultRows = int64(
-			message.VQLResponse.QueryStartRow + message.VQLResponse.TotalRows)
+		self.status.ResultRows += int64(message.VQLResponse.TotalRows)
 
 		addNameWithResponse(&self.status.NamesWithResponse,
 			message.VQLResponse.Query.Name)
@@ -206,7 +205,7 @@ func (self *FlowResponder) Return(ctx context.Context) {
 func (self *FlowResponder) Log(ctx context.Context, level string, msg string) {
 	// We dont need to hold the lock because we are just delegating to
 	// the flow context.
-	self.flow_context.AddLogMessage(level, msg)
+	self.flow_context.AddLogMessage(ctx, level, msg)
 
 	// Capture the first message at error level.
 	// FIXME: Support server provided error regex patterns

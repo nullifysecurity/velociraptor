@@ -1,4 +1,4 @@
-//+build extras
+//go:build extras
 
 package tools
 
@@ -13,7 +13,10 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"golang.org/x/net/context"
 	"www.velocidex.com/golang/velociraptor/accessors"
+	"www.velocidex.com/golang/velociraptor/acls"
+	"www.velocidex.com/golang/velociraptor/artifacts"
 	"www.velocidex.com/golang/velociraptor/uploads"
+	"www.velocidex.com/golang/velociraptor/vql"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/velociraptor/vql/networking"
 	"www.velocidex.com/golang/vfilter"
@@ -30,7 +33,8 @@ type S3UploadArgs struct {
 	CredentialsSecret    string            `vfilter:"optional,field=credentialssecret,doc=The AWS secret credentials to use"`
 	Endpoint             string            `vfilter:"optional,field=endpoint,doc=The Endpoint to use"`
 	ServerSideEncryption string            `vfilter:"optional,field=serversideencryption,doc=The server side encryption method to use"`
-	NoVerifyCert         bool              `vfilter:"optional,field=noverifycert,doc=Skip TLS Verification"`
+	NoVerifyCert         bool              `vfilter:"optional,field=noverifycert,doc=Skip TLS Verification (deprecated in favor of SkipVerify)"`
+	SkipVerify           bool              `vfilter:"optional,field=skip_verify,doc=Skip TLS Verification"`
 }
 
 type S3UploadFunction struct{}
@@ -44,6 +48,10 @@ func (self *S3UploadFunction) Call(ctx context.Context,
 	if err != nil {
 		scope.Log("upload_S3: %s", err.Error())
 		return vfilter.Null{}
+	}
+
+	if arg.NoVerifyCert {
+		scope.Log("upload_S3: NoVerifyCert is deprecated, please use SkipVerify")
 	}
 
 	err = vql_subsystem.CheckFilesystemAccess(scope, arg.Accessor)
@@ -88,7 +96,7 @@ func (self *S3UploadFunction) Call(ctx context.Context,
 			arg.Region,
 			arg.Endpoint,
 			arg.ServerSideEncryption,
-			arg.NoVerifyCert,
+			arg.NoVerifyCert || arg.SkipVerify,
 			uint64(stat.Size()))
 		if err != nil {
 			scope.Log("upload_S3: %v", err)
@@ -131,10 +139,20 @@ func upload_S3(ctx context.Context, scope vfilter.Scope,
 
 	if endpoint != "" {
 		conf = conf.WithEndpoint(endpoint).WithS3ForcePathStyle(true)
+
 		if NoVerifyCert {
+			clientConfig, _ := artifacts.GetConfig(scope)
+			tlsConfig, err := networking.GetSkipVerifyTlsConfig(clientConfig)
+
+			if err != nil {
+				return &uploads.UploadResponse{
+					Error: err.Error(),
+				}, err
+			}
+
 			tr := &http.Transport{
 				Proxy:           networking.GetProxy(),
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+				TLSClientConfig: tlsConfig,
 				TLSNextProto: make(map[string]func(
 					authority string, c *tls.Conn) http.RoundTripper),
 			}
@@ -143,8 +161,8 @@ func upload_S3(ctx context.Context, scope vfilter.Scope,
 
 			conf = conf.WithHTTPClient(client)
 		}
-
 	}
+
 	sess, err := session.NewSession(conf)
 	if err != nil {
 		return &uploads.UploadResponse{
@@ -188,9 +206,10 @@ func upload_S3(ctx context.Context, scope vfilter.Scope,
 func (self S3UploadFunction) Info(
 	scope vfilter.Scope, type_map *vfilter.TypeMap) *vfilter.FunctionInfo {
 	return &vfilter.FunctionInfo{
-		Name:    "upload_s3",
-		Doc:     "Upload files to S3.",
-		ArgType: type_map.AddType(scope, &S3UploadArgs{}),
+		Name:     "upload_s3",
+		Doc:      "Upload files to S3.",
+		ArgType:  type_map.AddType(scope, &S3UploadArgs{}),
+		Metadata: vql.VQLMetadata().Permissions(acls.FILESYSTEM_READ).Build(),
 	}
 }
 

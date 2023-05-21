@@ -75,6 +75,9 @@ const (
 	// Schedule or cancel new collections on clients.
 	COLLECT_CLIENT
 
+	// Allows the user to start a hunt
+	START_HUNT
+
 	// Schedule new artifact collections on velociraptor servers.
 	COLLECT_SERVER
 
@@ -111,12 +114,23 @@ const (
 	// Allowed to create zip files.
 	PREPARE_RESULTS
 
+	// Allowed to delete results from the server
+	DELETE_RESULTS
+
 	// Allowed raw datastore access
 	DATASTORE_ACCESS
 
 	// When adding new permission - update CheckAccess,
 	// GetRolePermissions and acl.proto
 )
+
+func (self ACL_PERMISSION) MarshalJSON() ([]byte, error) {
+	return []byte(fmt.Sprintf("\"%s\"", self.String())), nil
+}
+
+func (self ACL_PERMISSION) MarshalYAML() (interface{}, error) {
+	return self.String(), nil
+}
 
 func (self ACL_PERMISSION) String() string {
 	switch self {
@@ -134,6 +148,8 @@ func (self ACL_PERMISSION) String() string {
 		return "LABEL_CLIENT"
 	case COLLECT_CLIENT:
 		return "COLLECT_CLIENT"
+	case START_HUNT:
+		return "START_HUNT"
 	case COLLECT_SERVER:
 		return "COLLECT_SERVER"
 	case ARTIFACT_WRITER:
@@ -158,6 +174,8 @@ func (self ACL_PERMISSION) String() string {
 		return "MACHINE_STATE"
 	case PREPARE_RESULTS:
 		return "PREPARE_RESULTS"
+	case DELETE_RESULTS:
+		return "DELETE_RESULTS"
 	case DATASTORE_ACCESS:
 		return "DATASTORE_ACCESS"
 
@@ -182,6 +200,8 @@ func GetPermission(name string) ACL_PERMISSION {
 		return LABEL_CLIENT
 	case "COLLECT_CLIENT":
 		return COLLECT_CLIENT
+	case "START_HUNT":
+		return START_HUNT
 	case "COLLECT_SERVER":
 		return COLLECT_SERVER
 	case "ARTIFACT_WRITER":
@@ -206,6 +226,8 @@ func GetPermission(name string) ACL_PERMISSION {
 		return MACHINE_STATE
 	case "PREPARE_RESULTS":
 		return PREPARE_RESULTS
+	case "DELETE_RESULTS":
+		return DELETE_RESULTS
 	case "DATASTORE_ACCESS":
 		return DATASTORE_ACCESS
 

@@ -837,11 +837,6 @@ body.pink-light {
   border-top: none;
 }
 
-/* Spinner */
-.pink-light .overlay .fa-spinner {
-  filter: invert(0);
-}
-
 /* Shell output */
 .pink-light .notebook-output pre {
   border-color: var(--color-btn-border);
@@ -885,11 +880,6 @@ body.pink-light {
 
 .pink-light .velo__input {
   color: var(--color-foreground);
-}
-
-.pink-light .velo__option:hover,
-.pink-light .velo__option--is-focused {
-  background: var(--color-btn-default-background-hover);
 }
 
 .pink-light ::placeholder {

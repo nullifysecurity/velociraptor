@@ -23,12 +23,13 @@ import (
 	"www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/utils"
+	"www.velocidex.com/golang/velociraptor/vql/networking"
 )
 
 type Dummy struct {
 	mu        sync.Mutex
 	binaries  *artifacts_proto.ThirdParty
-	Client    HTTPClient
+	Client    networking.HTTPClient
 	Clock     utils.Clock
 	filenames []string
 }
@@ -89,18 +90,24 @@ func (self *Dummy) Get() *artifacts_proto.ThirdParty {
 
 func (self *Dummy) ProbeToolInfo(
 	ctx context.Context, config_obj *config_proto.Config,
-	name string) (*artifacts_proto.Tool, error) {
+	name, version string) (*artifacts_proto.Tool, error) {
 	for _, tool := range self.Get().Tools {
-		if tool.Name == name {
-			return tool, nil
+		if tool.Name != name {
+			continue
 		}
+		if version != "" && tool.Version != version {
+			continue
+		}
+
+		return tool, nil
 	}
 	return nil, errors.New("Not Found")
 }
 
 func (self *Dummy) GetToolInfo(
 	ctx context.Context,
-	config_obj *config_proto.Config, tool string) (*artifacts_proto.Tool, error) {
+	config_obj *config_proto.Config,
+	tool, version string) (*artifacts_proto.Tool, error) {
 	self.mu.Lock()
 	defer self.mu.Unlock()
 
@@ -109,6 +116,12 @@ func (self *Dummy) GetToolInfo(
 	}
 
 	for _, item := range self.binaries.Tools {
+		// If a version is specified skip tools that are not the
+		// correct version.
+		if version != "" && (item.Name != tool || item.Version == version) {
+			continue
+		}
+
 		if item.Name == tool {
 			// Currently we require to know all tool's
 			// hashes. If the hash is missing then the
@@ -198,7 +211,7 @@ func (self *Dummy) materializeTool(
 	return nil
 }
 
-func getGithubRelease(ctx context.Context, Client HTTPClient,
+func getGithubRelease(ctx context.Context, Client networking.HTTPClient,
 	config_obj *config_proto.Config,
 	tool *artifacts_proto.Tool) (string, error) {
 
@@ -256,7 +269,8 @@ func (self *Dummy) AddTool(
 	opts services.ToolOptions) error {
 	if opts.Upgrade {
 		existing_tool, err := self.ProbeToolInfo(
-			ctx, config_obj, tool_request.Name)
+			ctx, config_obj, tool_request.Name,
+			tool_request.Version)
 		if err == nil {
 			// Ignore the request if the existing
 			// definition is better than the new one.

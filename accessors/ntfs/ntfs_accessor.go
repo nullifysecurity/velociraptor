@@ -367,7 +367,7 @@ func (self *NTFSFileSystemAccessor) OpenWithOSPath(
 		accessor = fullpath.DelegateAccessor()
 	}
 
-	// We dont want to open a subpath of the filesyste, instead we
+	// We dont want to open a subpath of the filesystem, instead we
 	// special case this as openning the raw device.
 	if len(fullpath.Components) == 0 {
 		accessor, err := accessors.GetAccessor(accessor, self.scope)
@@ -458,6 +458,16 @@ func (self *NTFSFileSystemAccessor) LstatWithOSPath(
 			return nil, err
 		}
 		accessor = fullpath.DelegateAccessor()
+	}
+
+	// Attempting to stat the top level mean that we want to stat the
+	// device itself.
+	if self.device != nil && len(fullpath.Components) == 0 {
+		accessor_obj, err := accessors.GetAccessor(accessor, self.scope)
+		if err != nil {
+			return nil, err
+		}
+		return accessor_obj.LstatWithOSPath(self.device)
 	}
 
 	ntfs_ctx, err := readers.GetNTFSContext(self.scope, device, accessor)

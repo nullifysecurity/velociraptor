@@ -4,10 +4,9 @@ import (
 	"context"
 
 	"github.com/Velocidex/ordereddict"
-	"github.com/sirupsen/logrus"
 	"www.velocidex.com/golang/velociraptor/acls"
-	"www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/services"
+	"www.velocidex.com/golang/velociraptor/vql"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/vfilter"
 	"www.velocidex.com/golang/vfilter/arg_parser"
@@ -30,7 +29,7 @@ func (self DeleteFlowPlugin) Call(
 	go func() {
 		defer close(output_chan)
 
-		err := vql_subsystem.CheckAccess(scope, acls.READ_RESULTS)
+		err := vql_subsystem.CheckAccess(scope, acls.DELETE_RESULTS)
 		if err != nil {
 			scope.Log("delete_flow: %s", err)
 			return
@@ -56,16 +55,8 @@ func (self DeleteFlowPlugin) Call(
 		}
 
 		principal := vql_subsystem.GetPrincipal(scope)
-		if arg.ReallyDoIt {
-			logging.LogAudit(config_obj, principal, "delete_flow",
-				logrus.Fields{
-					"client_id": arg.ClientId,
-					"flow_id":   arg.FlowId,
-				})
-		}
-
-		responses, err := launcher.DeleteFlow(ctx, config_obj,
-			arg.ClientId, arg.FlowId, arg.ReallyDoIt)
+		responses, err := launcher.Storage().DeleteFlow(ctx, config_obj,
+			arg.ClientId, arg.FlowId, principal, arg.ReallyDoIt)
 		if err != nil {
 			scope.Log("delete_flow: %v", err)
 			return
@@ -85,9 +76,10 @@ func (self DeleteFlowPlugin) Call(
 
 func (self DeleteFlowPlugin) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) *vfilter.PluginInfo {
 	return &vfilter.PluginInfo{
-		Name:    "delete_flow",
-		Doc:     "Delete all the files that make up a flow.",
-		ArgType: type_map.AddType(scope, &FlowsPluginArgs{}),
+		Name:     "delete_flow",
+		Doc:      "Delete all the files that make up a flow.",
+		ArgType:  type_map.AddType(scope, &FlowsPluginArgs{}),
+		Metadata: vql.VQLMetadata().Permissions(acls.DELETE_RESULTS).Build(),
 	}
 }
 

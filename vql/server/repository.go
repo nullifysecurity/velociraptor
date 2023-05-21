@@ -5,10 +5,12 @@ import (
 	"strings"
 
 	"github.com/Velocidex/ordereddict"
+	"google.golang.org/protobuf/proto"
 	"www.velocidex.com/golang/velociraptor/acls"
 	artifacts_proto "www.velocidex.com/golang/velociraptor/artifacts/proto"
 	"www.velocidex.com/golang/velociraptor/json"
 	"www.velocidex.com/golang/velociraptor/services"
+	"www.velocidex.com/golang/velociraptor/vql"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/vfilter"
 	"www.velocidex.com/golang/vfilter/arg_parser"
@@ -45,8 +47,11 @@ func (self *ArtifactSetFunction) Call(ctx context.Context,
 	}
 
 	tmp_repository := manager.NewRepository()
-	definition, err := tmp_repository.LoadYaml(
-		arg.Definition, true /* validate */, false /* built_in */)
+	definition, err := tmp_repository.LoadYaml(arg.Definition,
+		services.ArtifactOptions{
+			ValidateArtifact:  true,
+			ArtifactIsBuiltIn: false,
+		})
 	if err != nil {
 		definition := arg.Definition
 		if len(arg.Definition) > 100 {
@@ -95,6 +100,8 @@ func (self ArtifactSetFunction) Info(
 		Name:    "artifact_set",
 		Doc:     "Sets an artifact into the global repository.",
 		ArgType: type_map.AddType(scope, &ArtifactSetFunctionArgs{}),
+		Metadata: vql.VQLMetadata().Permissions(
+			acls.ARTIFACT_WRITER, acls.SERVER_ARTIFACT_WRITER).Build(),
 	}
 }
 
@@ -176,6 +183,8 @@ func (self ArtifactDeleteFunction) Info(
 		Name:    "artifact_delete",
 		Doc:     "Deletes an artifact from the global repository.",
 		ArgType: type_map.AddType(scope, &ArtifactDeleteFunctionArgs{}),
+		Metadata: vql.VQLMetadata().Permissions(
+			acls.ARTIFACT_WRITER, acls.SERVER_ARTIFACT_WRITER).Build(),
 	}
 }
 
@@ -234,6 +243,18 @@ func (self ArtifactsPlugin) Call(
 			}
 			for _, name := range names {
 				artifact, pres := repository.Get(ctx, config_obj, name)
+				if !pres {
+					continue
+				}
+
+				// Clean up the artifact by removing internal fields.
+				artifact = proto.Clone(artifact).(*artifacts_proto.Artifact)
+				for _, source := range artifact.Sources {
+					if source.Query != "" && len(source.Queries) > 0 {
+						source.Queries = nil
+					}
+				}
+
 				if pres {
 					select {
 					case <-ctx.Done():
@@ -248,9 +269,11 @@ func (self ArtifactsPlugin) Call(
 		seen := make(map[string]*artifacts_proto.Artifact)
 		for _, name := range arg.Names {
 			artifact, pres := repository.Get(ctx, config_obj, name)
-			if pres {
-				seen[artifact.Name] = artifact
+			if !pres {
+				scope.Log("artifact_definitions: artifact %v not known", name)
+				continue
 			}
+			seen[artifact.Name] = artifact
 		}
 
 		launcher, err := services.GetLauncher(config_obj)
@@ -259,23 +282,26 @@ func (self ArtifactsPlugin) Call(
 			return
 		}
 
-		deps, err := launcher.GetDependentArtifacts(ctx,
-			config_obj, repository, arg.Names)
-		if err != nil {
-			scope.Log("artifact_definitions: %v", err)
-			return
+		if arg.IncludeDependencies {
+			deps, err := launcher.GetDependentArtifacts(ctx,
+				config_obj, repository, arg.Names)
+			if err != nil {
+				scope.Log("artifact_definitions: %v", err)
+				return
+			}
+
+			for _, name := range deps {
+				if name == "" {
+					continue
+				}
+				artifact, pres := repository.Get(ctx, config_obj, name)
+				if pres {
+					seen[artifact.Name] = artifact
+				}
+			}
 		}
 
-		for _, name := range deps {
-			if name == "" {
-				continue
-			}
-			artifact, pres := repository.Get(ctx, config_obj, name)
-			if !pres {
-				scope.Log("artifact_definitions: artifact %v not known", name)
-				continue
-			}
-
+		for _, artifact := range seen {
 			select {
 			case <-ctx.Done():
 				return
@@ -289,9 +315,10 @@ func (self ArtifactsPlugin) Call(
 
 func (self ArtifactsPlugin) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) *vfilter.PluginInfo {
 	return &vfilter.PluginInfo{
-		Name:    "artifact_definitions",
-		Doc:     "Dump artifact definitions.",
-		ArgType: type_map.AddType(scope, &ArtifactsPluginArgs{}),
+		Name:     "artifact_definitions",
+		Doc:      "Dump artifact definitions.",
+		ArgType:  type_map.AddType(scope, &ArtifactsPluginArgs{}),
+		Metadata: vql.VQLMetadata().Permissions(acls.READ_RESULTS).Build(),
 	}
 }
 

@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/Velocidex/ordereddict"
 	"github.com/crewjam/saml/samlsp"
 	"github.com/gorilla/csrf"
-	"github.com/sirupsen/logrus"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/constants"
@@ -28,6 +28,10 @@ type SamlAuthenticator struct {
 
 func (self *SamlAuthenticator) IsPasswordLess() bool {
 	return true
+}
+
+func (self *SamlAuthenticator) RequireClientCerts() bool {
+	return false
 }
 
 func (self *SamlAuthenticator) AuthRedirectTemplate() string {
@@ -125,12 +129,12 @@ Contact your system administrator to get an account, then try again.
 </body></html>
 `, username)
 
-			logging.LogAudit(self.config_obj, username, "User rejected by GUI",
-				logrus.Fields{
-					"remote": r.RemoteAddr,
-					"method": r.Method,
-					"error":  err.Error(),
-				})
+			services.LogAudit(r.Context(),
+				self.config_obj, username, "User rejected by GUI",
+				ordereddict.NewDict().
+					Set("remote", r.RemoteAddr).
+					Set("method", r.Method).
+					Set("error", err.Error()))
 
 			return
 		}

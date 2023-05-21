@@ -28,12 +28,14 @@ import (
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/Velocidex/yaml/v2"
+	errors "github.com/go-errors/errors"
+	"software.sslmate.com/src/go-pkcs12"
 
-	kingpin "gopkg.in/alecthomas/kingpin.v2"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
 	"www.velocidex.com/golang/velociraptor/config"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/crypto"
+	"www.velocidex.com/golang/velociraptor/crypto/utils"
 	"www.velocidex.com/golang/velociraptor/json"
 	"www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/services"
@@ -75,6 +77,9 @@ var (
 		"output", "The filename to write the config file on.").
 		Required().String()
 
+	config_api_client_pkcs12_output = config_api_client_command.Flag(
+		"pkcs12", "A filename to write the pkcs12 certificate file").String()
+
 	config_generate_command = config_command.Command(
 		"generate",
 		"Generate a new config file to stdout (with new keys).")
@@ -103,9 +108,17 @@ var (
 		"rotate_key",
 		"Generate a new config file with a rotates server key.")
 
+	config_rotate_server_key_valitidy = config_rotate_server_key.Flag(
+		"validity",
+		"How long should the cert be valid from in days (default 365).").Int64()
+
 	config_reissue_server_key = config_command.Command(
 		"reissue_key",
 		"Reissue all certificates with the same keys.")
+
+	config_reissue_server_key_valitidy = config_reissue_server_key.Flag(
+		"validity",
+		"How long should the cert be valid from in days (default 365).").Int64()
 )
 
 func maybeGetOrgConfig(
@@ -126,6 +139,8 @@ func maybeGetOrgConfig(
 }
 
 func doShowConfig() error {
+	logging.DisableLogging()
+
 	config_obj, err := makeDefaultConfigLoader().
 		LoadAndValidate()
 	if err != nil {
@@ -227,6 +242,8 @@ func generateNewKeys(config_obj *config_proto.Config) error {
 }
 
 func doGenerateConfigNonInteractive() error {
+	logging.DisableLogging()
+
 	// We have to suppress writing to stdout so users can redirect
 	// output to a file.
 	logging.SuppressLogging = true
@@ -257,10 +274,19 @@ func doGenerateConfigNonInteractive() error {
 }
 
 func doRotateKeyConfig() error {
+	logging.DisableLogging()
+
 	config_obj, err := makeDefaultConfigLoader().
 		WithRequiredFrontend().LoadAndValidate()
 	if err != nil {
 		return err
+	}
+
+	if *config_rotate_server_key_valitidy > 0 {
+		if config_obj.Defaults == nil {
+			config_obj.Defaults = &config_proto.Defaults{}
+		}
+		config_obj.Defaults.CertificateValidityDays = *config_rotate_server_key_valitidy
 	}
 
 	// Frontends must have a well known common name.
@@ -293,15 +319,23 @@ func doRotateKeyConfig() error {
 }
 
 func doReissueServerKeys() error {
+	logging.DisableLogging()
+
 	config_obj, err := makeDefaultConfigLoader().
 		WithRequiredFrontend().LoadAndValidate()
 	if err != nil {
 		return err
 	}
 
+	if *config_reissue_server_key_valitidy > 0 {
+		if config_obj.Defaults == nil {
+			config_obj.Defaults = &config_proto.Defaults{}
+		}
+		config_obj.Defaults.CertificateValidityDays = *config_reissue_server_key_valitidy
+	}
+
 	logger := logging.GetLogger(config_obj, &logging.ToolComponent)
 
-	// Frontends must have a well known common name.
 	frontend_cert, err := crypto.ReissueServerCert(
 		config_obj, config_obj.Frontend.Certificate,
 		config_obj.Frontend.PrivateKey)
@@ -344,6 +378,8 @@ func getClientConfig(config_obj *config_proto.Config) *config_proto.Config {
 }
 
 func doDumpClientConfig() error {
+	logging.DisableLogging()
+
 	config_obj, err := makeDefaultConfigLoader().
 		WithRequiredClient().LoadAndValidate()
 	if err != nil {
@@ -353,6 +389,7 @@ func doDumpClientConfig() error {
 	ctx, cancel := install_sig_handler()
 	defer cancel()
 
+	config_obj.Services = services.GenericToolServices()
 	sm, err := startup.StartToolServices(ctx, config_obj)
 	if err != nil {
 		return fmt.Errorf("Starting services: %w", err)
@@ -375,6 +412,8 @@ func doDumpClientConfig() error {
 }
 
 func doDumpApiClientConfig() error {
+	logging.DisableLogging()
+
 	config_obj, err := makeDefaultConfigLoader().
 		WithRequiredCA().
 		WithRequiredUser().
@@ -384,8 +423,12 @@ func doDumpApiClientConfig() error {
 	}
 
 	if *config_api_client_common_name == config_obj.Client.PinnedServerName {
-		kingpin.Fatalf("Name reserved! You may not name your " +
+		return errors.New("Name reserved! You may not name your " +
 			"api keys with this name.")
+	}
+
+	if config_obj.Client == nil {
+		return errors.New("Config does not have a client config!")
 	}
 
 	config_obj.Services = services.GenericToolServices()
@@ -405,8 +448,8 @@ func doDumpApiClientConfig() error {
 		return fmt.Errorf("Unable to generate certificate: %w", err)
 	}
 
+	password := ""
 	if *config_api_client_password_protect {
-		password := ""
 		err = survey.AskOne(
 			&survey.Password{Message: "Password:"},
 			&password,
@@ -428,7 +471,34 @@ func doDumpApiClientConfig() error {
 		}
 
 		bundle.PrivateKey = string(pem.EncodeToMemory(block))
-		return nil
+	}
+
+	// Possibly dump out the pkcs12 key
+	if *config_api_client_pkcs12_output != "" {
+		ca_cert, err := utils.ParseX509CertFromPemStr([]byte(
+			config_obj.Client.CaCertificate))
+		if err != nil {
+			return err
+		}
+
+		data, err := pkcs12.Encode(rand.Reader, bundle.PrivateKeyObj,
+			bundle.Certificate, []*x509.Certificate{ca_cert}, password)
+		if err != nil {
+			return err
+		}
+
+		fd, err := os.OpenFile(*config_api_client_pkcs12_output,
+			os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+		if err != nil {
+			return err
+		}
+		_, err = fd.Write(data)
+		if err != nil {
+			return err
+		}
+		fd.Close()
+
+		fmt.Printf("Wrote PKCS12 file on %v.\n", *config_api_client_pkcs12_output)
 	}
 
 	api_client_config := &config_proto.ApiClientConfig{

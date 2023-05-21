@@ -67,6 +67,16 @@ name: WaitForCancel
 type: SERVER_EVENT
 sources:
 - query: SELECT * FROM register_run_count() WHERE log(message="Finished!", dedup=-1)
+`, `
+name: EventTest.Alert
+type: SERVER_EVENT
+sources:
+- query: |
+    SELECT * FROM scope()
+    WHERE alert(name="TestAlert", field="Field1")
+`, `
+name: Server.Internal.Alerts
+type: SERVER_EVENT
 `}
 )
 
@@ -78,7 +88,7 @@ func (self *ServerMonitoringTestSuite) SetupTest() {
 	self.ConfigObj = self.TestSuite.LoadConfig()
 	self.ConfigObj.Services.MonitoringService = true
 
-	self.LoadArtifacts(monitoringArtifacts)
+	self.LoadArtifactsIntoConfig(monitoringArtifacts)
 	self.TestSuite.SetupTest()
 }
 
@@ -98,7 +108,7 @@ func (self *ServerMonitoringTestSuite) TestMultipleArtifacts() {
 	assert.Equal(self.T(), "Server.Monitor.Health", configuration.Artifacts[0])
 
 	// Install the two event artifacts.
-	err = event_table.Update(
+	err = event_table.Update(self.Ctx,
 		self.ConfigObj, "",
 		&flows_proto.ArtifactCollectorArgs{
 			Artifacts: []string{"Server.Clock", "Server.Clock2"},
@@ -167,10 +177,53 @@ func (self *ServerMonitoringTestSuite) TestMultipleArtifacts() {
 	goldie.Assert(self.T(), "TestMultipleArtifacts", golden_str)
 }
 
+func (self *ServerMonitoringTestSuite) TestAlertEvent() {
+	mock_clock := &utils.MockClock{
+		MockNow: time.Unix(1602103388, 0),
+	}
+
+	closer := utils.MockTime(mock_clock)
+	defer closer()
+
+	journal, err := services.GetJournal(self.ConfigObj)
+	assert.NoError(self.T(), err)
+	journal.SetClock(mock_clock)
+
+	event_table, err := services.GetServerEventManager(self.ConfigObj)
+	assert.NoError(self.T(), err)
+	event_table.(*server_monitoring.EventTable).SetClock(mock_clock)
+
+	// Install the two event artifacts.
+	err = event_table.Update(self.Ctx,
+		self.ConfigObj, "",
+		&flows_proto.ArtifactCollectorArgs{
+			Artifacts: []string{"EventTest.Alert"},
+		})
+	assert.NoError(self.T(), err)
+
+	// Wait here until all the queries are done.
+	event_table.(*server_monitoring.EventTable).Wait()
+
+	golden := ordereddict.NewDict()
+
+	fs := test_utils.GetMemoryFileStore(self.T(), self.ConfigObj)
+	for _, path := range []string{
+		"/server_artifacts/Server.Internal.Alerts/2020-10-07.json",
+		"/server_artifacts/EventTest.Alert/2020-10-07.json",
+	} {
+		value, pres := fs.Get(path)
+		if pres {
+			golden.Set(path, strings.Split(string(value), "\n"))
+		}
+	}
+	goldie.AssertJson(self.T(), "TestAlertEvent", golden)
+}
+
 func (self *ServerMonitoringTestSuite) TestEmptyTable() {
 	event_table, err := services.GetServerEventManager(self.ConfigObj)
 	assert.NoError(self.T(), err)
-	event_table.(*server_monitoring.EventTable).SetClock(&utils.MockClock{MockNow: time.Unix(1602103388, 0)})
+	event_table.(*server_monitoring.EventTable).SetClock(
+		&utils.MockClock{MockNow: time.Unix(1602103388, 0)})
 
 	manager, err := services.GetRepositoryManager(self.ConfigObj)
 	assert.NoError(self.T(), err)
@@ -183,11 +236,14 @@ func (self *ServerMonitoringTestSuite) TestEmptyTable() {
 name: Sleep
 sources:
 - query: SELECT sleep(time=1000) FROM scope()
-`, services.ValidateArtifact, services.ArtifactIsBuiltIn)
+`, services.ArtifactOptions{
+		ValidateArtifact:  true,
+		ArtifactIsBuiltIn: true})
+
 	assert.NoError(self.T(), err)
 
 	// Install a table with a sleep artifact.
-	err = event_table.Update(
+	err = event_table.Update(self.Ctx,
 		self.ConfigObj, "",
 		&flows_proto.ArtifactCollectorArgs{
 			Artifacts: []string{"Sleep"},
@@ -201,7 +257,7 @@ sources:
 	})
 
 	// Now install an empty table - all queries should quit.
-	err = event_table.Update(
+	err = event_table.Update(self.Ctx,
 		self.ConfigObj, "",
 		&flows_proto.ArtifactCollectorArgs{
 			Artifacts: []string{},
@@ -245,7 +301,7 @@ func (self *ServerMonitoringTestSuite) TestQueriesAreCancelled() {
 	event_table, err := services.GetServerEventManager(self.ConfigObj)
 	assert.NoError(self.T(), err)
 
-	err = event_table.Update(
+	err = event_table.Update(self.Ctx,
 		self.ConfigObj, "",
 		&flows_proto.ArtifactCollectorArgs{
 			Artifacts: []string{"WaitForCancel"},
@@ -259,7 +315,7 @@ func (self *ServerMonitoringTestSuite) TestQueriesAreCancelled() {
 	})
 
 	// Now install an empty table - all queries should quit.
-	err = event_table.Update(
+	err = event_table.Update(self.Ctx,
 		self.ConfigObj, "",
 		&flows_proto.ArtifactCollectorArgs{
 			Artifacts: []string{},
@@ -280,7 +336,8 @@ func (self *ServerMonitoringTestSuite) TestUpdateWhenArtifactModified() {
 	defer os.RemoveAll(tempdir)
 
 	event_table, err := services.GetServerEventManager(self.ConfigObj)
-	event_table.(*server_monitoring.EventTable).SetClock(&utils.MockClock{MockNow: time.Unix(1602103388, 0)})
+	event_table.(*server_monitoring.EventTable).SetClock(
+		&utils.MockClock{MockNow: time.Unix(1602103388, 0)})
 
 	manager, err := services.GetRepositoryManager(self.ConfigObj)
 	assert.NoError(self.T(), err)
@@ -298,12 +355,15 @@ sources:
 - query: |
    SELECT copy(accessor='data', filename='hello', dest=Filename)
    FROM scope()
-`, services.ValidateArtifact, !services.ArtifactIsBuiltIn)
+`, services.ArtifactOptions{
+		ValidateArtifact:  true,
+		ArtifactIsBuiltIn: false})
+
 	assert.NoError(self.T(), err)
 
 	// Install a table with an initial artifact
 	filename := filepath.Join(tempdir, "testfile1.txt")
-	err = event_table.Update(
+	err = event_table.Update(self.Ctx,
 		self.ConfigObj, "VelociraptorServer",
 		&flows_proto.ArtifactCollectorArgs{
 			Artifacts: []string{"TestArtifact"},

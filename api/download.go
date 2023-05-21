@@ -27,6 +27,7 @@ package api
 
 import (
 	"bytes"
+	"fmt"
 	"html"
 	"io"
 	"io/ioutil"
@@ -41,7 +42,6 @@ import (
 	errors "github.com/go-errors/errors"
 	"github.com/gorilla/schema"
 
-	"github.com/sirupsen/logrus"
 	context "golang.org/x/net/context"
 	"www.velocidex.com/golang/velociraptor/acls"
 	actions_proto "www.velocidex.com/golang/velociraptor/actions/proto"
@@ -55,7 +55,6 @@ import (
 	"www.velocidex.com/golang/velociraptor/file_store/path_specs"
 	"www.velocidex.com/golang/velociraptor/flows"
 	"www.velocidex.com/golang/velociraptor/json"
-	"www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/paths"
 	"www.velocidex.com/golang/velociraptor/paths/artifacts"
 	"www.velocidex.com/golang/velociraptor/result_sets"
@@ -110,6 +109,8 @@ func vfsFileDownloadHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		request := vfsFileDownloadRequest{}
 		decoder := schema.NewDecoder()
+		decoder.IgnoreUnknownKeys(true)
+
 		err := decoder.Decode(&request, r.URL.Query())
 		if err != nil {
 			returnError(w, 403, "Error "+err.Error())
@@ -176,7 +177,14 @@ func vfsFileDownloadHandler() http.Handler {
 			return
 		}
 
+		// We need to figure out the total size of the upload to set
+		// in the Content Length header. There are three
+		// possibilities:
+		// 1. The file is not sparse
+		// 2. The file is sparse and we are not padding.
+		// 3. The file is sparse and we are padding it.
 		var reader_at io.ReaderAt = utils.MakeReaderAtter(file)
+		var total_size int
 
 		index, err := getIndex(org_config_obj, path_spec)
 
@@ -191,7 +199,13 @@ func vfsFileDownloadHandler() http.Handler {
 				ReaderAt: reader_at,
 				Index:    index,
 			}
+
+			total_size = calculateTotalSizeWithPadding(index)
+		} else {
+			total_size = calculateTotalReaderSize(file)
 		}
+
+		emitContentLength(w, int(request.Offset), int(request.Length), total_size)
 
 		offset := request.Offset
 
@@ -386,6 +400,8 @@ func downloadTable() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		request := &api_proto.GetTableRequest{}
 		decoder := schema.NewDecoder()
+		decoder.IgnoreUnknownKeys(true)
+
 		decoder.SetAliasTag("json")
 		err := decoder.Decode(request, r.URL.Query())
 		if err != nil {
@@ -450,11 +466,11 @@ func downloadTable() http.Handler {
 			w.Header().Set("Content-Type", "binary/octet-stream")
 			w.WriteHeader(200)
 
-			logging.LogAudit(org_config_obj, principal, "DownloadTable",
-				logrus.Fields{
-					"request": request,
-					"remote":  r.RemoteAddr,
-				})
+			services.LogAudit(r.Context(),
+				org_config_obj, principal, "DownloadTable",
+				ordereddict.NewDict().
+					Set("request", request).
+					Set("remote", r.RemoteAddr))
 
 			scope := vql_subsystem.MakeScope()
 			csv_writer := csv.GetCSVAppender(
@@ -479,11 +495,11 @@ func downloadTable() http.Handler {
 			w.Header().Set("Content-Type", "binary/octet-stream")
 			w.WriteHeader(200)
 
-			logging.LogAudit(org_config_obj, principal, "DownloadTable",
-				logrus.Fields{
-					"request": request,
-					"remote":  r.RemoteAddr,
-				})
+			services.LogAudit(r.Context(),
+				org_config_obj, principal, "DownloadTable",
+				ordereddict.NewDict().
+					Set("request", request).
+					Set("remote", r.RemoteAddr))
 
 			for row := range row_chan {
 				serialized, err := json.MarshalWithOptions(
@@ -577,4 +593,44 @@ func filterColumns(columns []string, row *ordereddict.Dict) *ordereddict.Dict {
 		new_row.Set(column, value)
 	}
 	return new_row
+}
+
+func calculateTotalSizeWithPadding(index *actions_proto.Index) int {
+	size := 0
+	for _, r := range index.Ranges {
+		size += int(r.Length)
+	}
+	return size
+}
+
+func calculateTotalReaderSize(reader api.FileReader) int {
+	stat, err := reader.Stat()
+	if err == nil {
+		return int(stat.Size())
+	}
+	return 0
+}
+
+func emitContentLength(w http.ResponseWriter, offset int, req_length int, size int) {
+	// Size is not known or 0, do not send a Content Length
+	if size == 0 || offset > size {
+		return
+	}
+
+	// How much data is available to read in the file.
+	available := size - offset
+
+	// If the user asked for less data than is available, then we will
+	// return less, otherwise we only return how much data is
+	// available.
+	if req_length > BUFSIZE {
+		req_length = BUFSIZE
+	}
+
+	// req_length of 0 means download the entire file without byte ranges.
+	if req_length > 0 && req_length < available {
+		available = req_length
+	}
+
+	w.Header().Set("Content-Length", fmt.Sprintf("%v", available))
 }

@@ -54,8 +54,7 @@ func (self *PluginTestSuite) TestArtifactsSyntax() {
 	assert.NoError(self.T(), err)
 
 	err = repository.LoadBuiltInArtifacts(
-		self.Ctx, self.ConfigObj, manager.(*repository.RepositoryManager),
-		services.ValidateArtifact)
+		self.Ctx, self.ConfigObj, manager.(*repository.RepositoryManager))
 	assert.NoError(self.T(), err)
 
 	ConfigObj := self.ConfigObj
@@ -72,22 +71,11 @@ func (self *PluginTestSuite) TestArtifactsSyntax() {
 		assert.True(self.T(), pres)
 
 		if artifact != nil && !artifact.IsAlias {
-			_, err = new_repository.LoadProto(artifact, services.ValidateArtifact)
+			_, err = new_repository.LoadProto(artifact,
+				services.ArtifactOptions{ValidateArtifact: true})
 			assert.NoError(self.T(), err, "Error compiling "+artifact_name)
 		}
 	}
-}
-
-func (self *PluginTestSuite) LoadArtifacts(artifact_definitions []string) services.Repository {
-	manager, _ := services.GetRepositoryManager(self.ConfigObj)
-	repository := manager.NewRepository()
-
-	for _, definition := range artifact_definitions {
-		_, err := repository.LoadYaml(definition, false, true)
-		assert.NoError(self.T(), err)
-	}
-
-	return repository
 }
 
 var (
@@ -128,7 +116,7 @@ sources:
 )
 
 func (self *PluginTestSuite) TestArtifactPluginWithPrecondition() {
-	repository := self.LoadArtifacts(artifact_definitions_precondition)
+	repository := self.LoadArtifacts(artifact_definitions_precondition...)
 
 	builder := services.ScopeBuilder{
 		Config:     self.ConfigObj,
@@ -188,7 +176,7 @@ sources:
 // Test that calling a client artifact with multiple sources results
 // in all rows.
 func (self *PluginTestSuite) TestClientPluginMultipleSources() {
-	repository := self.LoadArtifacts(source_definitions)
+	repository := self.LoadArtifacts(source_definitions...)
 	request := &flows_proto.ArtifactCollectorArgs{
 		ClientId:  "C.1234",
 		Artifacts: []string{"Call"},
@@ -245,7 +233,7 @@ sources:
 // Test that calling a client artifact with multiple sources results
 // in all rows.
 func (self *PluginTestSuite) TestClientPluginMultipleSourcesAndPrecondtions() {
-	repository := self.LoadArtifacts(precondition_source_definitions)
+	repository := self.LoadArtifacts(precondition_source_definitions...)
 	builder := services.ScopeBuilder{
 		Config:     self.ConfigObj,
 		ACLManager: acl_managers.NullACLManager{},
@@ -305,7 +293,7 @@ sources:
 // Test that calling a client artifact with multiple sources results
 // in all rows.
 func (self *PluginTestSuite) TestClientPluginMultipleSourcesAndPrecondtionsEvents() {
-	repository := self.LoadArtifacts(precondition_source_events_definitions)
+	repository := self.LoadArtifacts(precondition_source_events_definitions...)
 	builder := services.ScopeBuilder{
 		Config:     self.ConfigObj,
 		ACLManager: acl_managers.NullACLManager{},

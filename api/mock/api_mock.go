@@ -842,7 +842,7 @@ func (mr *MockAPIClientMockRecorder) ListHunts(arg0, arg1 interface{}, arg2 ...i
 }
 
 // LoadArtifactPack mocks base method.
-func (m *MockAPIClient) LoadArtifactPack(arg0 context.Context, arg1 *proto0.VFSFileBuffer, arg2 ...grpc.CallOption) (*proto0.LoadArtifactPackResponse, error) {
+func (m *MockAPIClient) LoadArtifactPack(arg0 context.Context, arg1 *proto0.LoadArtifactPackRequest, arg2 ...grpc.CallOption) (*proto0.LoadArtifactPackResponse, error) {
 	m.ctrl.T.Helper()
 	varargs := []interface{}{arg0, arg1}
 	for _, a := range arg2 {
@@ -999,6 +999,26 @@ func (mr *MockAPIClientMockRecorder) ReformatVQL(arg0, arg1 interface{}, arg2 ..
 	mr.mock.ctrl.T.Helper()
 	varargs := append([]interface{}{arg0, arg1}, arg2...)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReformatVQL", reflect.TypeOf((*MockAPIClient)(nil).ReformatVQL), varargs...)
+}
+
+// SearchFile mocks base method.
+func (m *MockAPIClient) SearchFile(arg0 context.Context, arg1 *proto0.SearchFileRequest, arg2 ...grpc.CallOption) (*proto0.SearchFileResponse, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1}
+	for _, a := range arg2 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "SearchFile", varargs...)
+	ret0, _ := ret[0].(*proto0.SearchFileResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// SearchFile indicates an expected call of SearchFile.
+func (mr *MockAPIClientMockRecorder) SearchFile(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1}, arg2...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SearchFile", reflect.TypeOf((*MockAPIClient)(nil).SearchFile), varargs...)
 }
 
 // SetArtifactFile mocks base method.
@@ -1239,6 +1259,26 @@ func (mr *MockAPIClientMockRecorder) UploadNotebookAttachment(arg0, arg1 interfa
 	mr.mock.ctrl.T.Helper()
 	varargs := append([]interface{}{arg0, arg1}, arg2...)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UploadNotebookAttachment", reflect.TypeOf((*MockAPIClient)(nil).UploadNotebookAttachment), varargs...)
+}
+
+// VFSDownloadFile mocks base method.
+func (m *MockAPIClient) VFSDownloadFile(arg0 context.Context, arg1 *proto0.VFSStatDownloadRequest, arg2 ...grpc.CallOption) (*proto0.StartFlowResponse, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1}
+	for _, a := range arg2 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "VFSDownloadFile", varargs...)
+	ret0, _ := ret[0].(*proto0.StartFlowResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// VFSDownloadFile indicates an expected call of VFSDownloadFile.
+func (mr *MockAPIClientMockRecorder) VFSDownloadFile(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1}, arg2...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "VFSDownloadFile", reflect.TypeOf((*MockAPIClient)(nil).VFSDownloadFile), varargs...)
 }
 
 // VFSGetBuffer mocks base method.

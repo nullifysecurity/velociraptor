@@ -9,6 +9,7 @@ import (
 	"www.velocidex.com/golang/velociraptor/acls"
 	acl_proto "www.velocidex.com/golang/velociraptor/acls/proto"
 	"www.velocidex.com/golang/velociraptor/json"
+	logging "www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/startup"
 	"www.velocidex.com/golang/velociraptor/utils"
@@ -52,6 +53,8 @@ var (
 )
 
 func doGrant() error {
+	logging.DisableLogging()
+
 	config_obj, err := makeDefaultConfigLoader().
 		WithRequiredFrontend().
 		WithRequiredUser().
@@ -64,7 +67,6 @@ func doGrant() error {
 	defer cancel()
 
 	config_obj.Services = services.GenericToolServices()
-
 	sm, err := startup.StartToolServices(ctx, config_obj)
 	defer sm.Close()
 
@@ -140,7 +142,10 @@ func doGrant() error {
 }
 
 func doShow() error {
-	config_obj, err := makeDefaultConfigLoader().WithRequiredFrontend().LoadAndValidate()
+	logging.DisableLogging()
+
+	config_obj, err := makeDefaultConfigLoader().
+		WithRequiredFrontend().LoadAndValidate()
 	if err != nil {
 		return fmt.Errorf("Unable to load config file: %w", err)
 	}
@@ -148,6 +153,7 @@ func doShow() error {
 	ctx, cancel := install_sig_handler()
 	defer cancel()
 
+	config_obj.Services = services.GenericToolServices()
 	sm, err := startup.StartToolServices(ctx, config_obj)
 	defer sm.Close()
 
@@ -156,10 +162,11 @@ func doShow() error {
 	}
 
 	principal := *show_command_principal
+
 	existing_policy, err := services.GetPolicy(config_obj, principal)
 	if err != nil {
-		return fmt.Errorf("Unable to load existing policy for '%v' ",
-			principal)
+		return fmt.Errorf("Unable to load existing policy for '%v': %v ",
+			principal, err)
 	}
 
 	if *show_command_effective {

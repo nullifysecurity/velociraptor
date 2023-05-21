@@ -27,6 +27,7 @@ import (
 	"github.com/Velocidex/yaml/v2"
 	"www.velocidex.com/golang/velociraptor/accessors"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
+	logging "www.velocidex.com/golang/velociraptor/logging"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/vfilter/types"
 )
@@ -151,6 +152,8 @@ func formatFunctions(
 }
 
 func doVQLList() error {
+	logging.DisableLogging()
+
 	scope := vql_subsystem.MakeScope()
 	defer scope.Close()
 
@@ -193,6 +196,8 @@ func getOldItem(name, item_type string, old_data []*api_proto.Completion) *api_p
 }
 
 func doVQLExport() error {
+	logging.DisableLogging()
+
 	scope := vql_subsystem.MakeScope()
 	defer scope.Close()
 
@@ -229,17 +234,28 @@ func doVQLExport() error {
 		// over-ridden by the new plugins. But any new arg
 		// descriptions are always copied from the running code.
 		new_item := getOldItem(item.Name, "Plugin", old_data)
+		var metadata map[string]string
+		if item.Metadata != nil {
+			metadata = make(map[string]string)
+			for _, k := range item.Metadata.Keys() {
+				v, _ := item.Metadata.GetString(k)
+				metadata[k] = v
+			}
+		}
+
 		if new_item == nil {
 			new_item = &api_proto.Completion{
 				Name:        item.Name,
 				Description: item.Doc,
 				Version:     uint64(item.Version),
 				Type:        "Plugin",
+				Metadata:    metadata,
 			}
 		} else {
 			// Override the args and update the version
 			new_item.Args = nil
 			new_item.Version = uint64(item.Version)
+			new_item.Metadata = metadata
 		}
 
 		arg_desc, pres := type_map.Get(scope, item.ArgType)
@@ -276,17 +292,28 @@ func doVQLExport() error {
 		seen_functions[item.Name] = true
 
 		new_item := getOldItem(item.Name, "Function", old_data)
+		var metadata map[string]string
+		if item.Metadata != nil {
+			metadata = make(map[string]string)
+			for _, k := range item.Metadata.Keys() {
+				v, _ := item.Metadata.GetString(k)
+				metadata[k] = v
+			}
+		}
+
 		if new_item == nil {
 			new_item = &api_proto.Completion{
 				Name:        item.Name,
 				Description: item.Doc,
 				Version:     uint64(item.Version),
 				Type:        "Function",
+				Metadata:    metadata,
 			}
 		} else {
 			// Override the args
 			new_item.Args = nil
 			new_item.Version = uint64(item.Version)
+			new_item.Metadata = metadata
 		}
 
 		arg_desc, pres := type_map.Get(scope, item.ArgType)

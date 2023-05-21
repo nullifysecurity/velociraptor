@@ -78,6 +78,8 @@ var (
 )
 
 func doInstall(config_obj *config_proto.Config) (err error) {
+	logging.DisableLogging()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -321,6 +323,8 @@ func removeService(name string) error {
 }
 
 func doRemove() error {
+	logging.DisableLogging()
+
 	config_obj, err := makeDefaultConfigLoader().LoadAndValidate()
 	if err != nil {
 		return fmt.Errorf("Unable to load config file: %w", err)
@@ -545,6 +549,14 @@ func runOnce(ctx context.Context,
 			"Can not create client: %v", err))
 		time.Sleep(10 * time.Second)
 		return
+	}
+
+	// Check for crashes etc
+	err = executor.RunStartupTasks(ctx, config_obj, sm.Wg, exe)
+	if err != nil {
+		// Not a fatal error, just move on
+		logger := logging.GetLogger(config_obj, &logging.ClientComponent)
+		logger.Error("<red>Start up error:</> %v", err)
 	}
 
 	<-ctx.Done()

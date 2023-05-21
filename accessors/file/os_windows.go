@@ -34,6 +34,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	ntfs "www.velocidex.com/golang/go-ntfs/parser"
 	"www.velocidex.com/golang/velociraptor/accessors"
 	"www.velocidex.com/golang/velociraptor/acls"
 	"www.velocidex.com/golang/velociraptor/json"
@@ -160,7 +161,7 @@ func discoverDriveLetters() ([]accessors.FileInfo, error) {
 		"ROOT\\CIMV2")
 	if err == nil {
 		for _, row := range shadow_volumes {
-			size, _ := row.GetInt64("Size")
+			size := utils.GetInt64(row, "Size")
 			device_name, pres := row.GetString("DeviceID")
 			if pres {
 				device_path, err := accessors.NewWindowsOSPath(device_name)
@@ -271,6 +272,27 @@ func (self OSFileSystemAccessor) Open(path string) (accessors.ReadSeekCloser, er
 
 func (self OSFileSystemAccessor) OpenWithOSPath(full_path *accessors.OSPath) (
 	accessors.ReadSeekCloser, error) {
+
+	// Opening the drive letter directly produces a reader over the
+	// raw disk.
+	if len(full_path.Components) == 1 {
+		device_name := full_path.Components[0]
+		if !strings.HasPrefix(device_name, "\\\\") {
+			device_name = "\\\\.\\" + device_name
+		}
+		file, err := os.Open(device_name)
+		if err != nil {
+			return nil, err
+		}
+
+		// Need to read the raw device in pagesize sizes
+		reader, err := ntfs.NewPagedReader(file, 0x1000, 1000)
+		if err != nil {
+			return nil, err
+		}
+		return utils.NewReadSeekReaderAdapter(reader), err
+	}
+
 	filename := full_path.String()
 
 	// The API does not accept filenames with trailing \\ for an open call.
@@ -300,6 +322,22 @@ func (self *OSFileSystemAccessor) Lstat(path string) (accessors.FileInfo, error)
 
 func (self *OSFileSystemAccessor) LstatWithOSPath(full_path *accessors.OSPath) (
 	accessors.FileInfo, error) {
+
+	// An Lstat of a device returns metadata about the device
+	if len(full_path.Components) == 1 {
+		devices, err := discoverDriveLetters()
+		if err != nil {
+			return nil, err
+		}
+
+		// Find the right device information
+		for _, d := range devices {
+			if full_path.Components[0] == d.Name() {
+				return d, nil
+			}
+		}
+		return nil, errors.New("Not found")
+	}
 
 	stat, err := os.Lstat(full_path.String())
 	return &OSFileInfo{

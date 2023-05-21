@@ -145,6 +145,12 @@ func runClientOnce(
 		return err
 	}
 
+	// Check for crashes
+	err = executor.RunStartupTasks(ctx, config_obj, sm.Wg, exe)
+	if err != nil {
+		return err
+	}
+
 	<-ctx.Done()
 	return nil
 }

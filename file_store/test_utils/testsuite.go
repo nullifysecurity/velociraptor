@@ -121,7 +121,7 @@ func (self *TestSuite) SetupTest() {
 		self.ConfigObj = self.LoadConfig()
 	}
 
-	self.LoadArtifacts(definitions)
+	self.LoadArtifactsIntoConfig(definitions)
 
 	// Start essential services.
 	self.Ctx, self.cancel = context.WithTimeout(context.Background(), time.Second*60)
@@ -140,9 +140,23 @@ func (self *TestSuite) SetupTest() {
 	})
 }
 
+func (self *TestSuite) LoadArtifacts(definitions ...string) services.Repository {
+	manager, _ := services.GetRepositoryManager(self.ConfigObj)
+	repository, _ := manager.GetGlobalRepository(self.ConfigObj)
+
+	for _, definition := range definitions {
+		_, err := repository.LoadYaml(definition,
+			services.ArtifactOptions{
+				ValidateArtifact:  false,
+				ArtifactIsBuiltIn: true})
+		assert.NoError(self.T(), err)
+	}
+	return repository
+}
+
 // Parse the definitions and add them to the config so they will be
 // loaded by the repository manager.
-func (self *TestSuite) LoadArtifacts(definitions []string) {
+func (self *TestSuite) LoadArtifactsIntoConfig(definitions []string) {
 	if self.ConfigObj.Autoexec == nil {
 		self.ConfigObj.Autoexec = &config_proto.AutoExecConfig{}
 	}
@@ -181,7 +195,10 @@ func (self *TestSuite) LoadArtifactFiles(paths ...string) {
 		def, err := ioutil.ReadAll(fd)
 		assert.NoError(self.T(), err)
 
-		_, err = global_repo.LoadYaml(string(def), true, true)
+		_, err = global_repo.LoadYaml(string(def),
+			services.ArtifactOptions{
+				ValidateArtifact:  true,
+				ArtifactIsBuiltIn: true})
 		assert.NoError(self.T(), err)
 	}
 }

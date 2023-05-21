@@ -28,6 +28,7 @@ import (
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/uploads"
 	"www.velocidex.com/golang/velociraptor/utils"
+	"www.velocidex.com/golang/velociraptor/vql"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/vfilter"
 	"www.velocidex.com/golang/vfilter/arg_parser"
@@ -81,12 +82,12 @@ func (self *CreateFlowDownload) Call(ctx context.Context,
 	}
 
 	principal := vql_subsystem.GetPrincipal(scope)
-	logging.LogAudit(config_obj, principal, "create_flow_download",
-		logrus.Fields{
-			"format":    format,
-			"client_id": arg.ClientId,
-			"flow_id":   arg.FlowId,
-		})
+	services.LogAudit(ctx,
+		config_obj, principal, "create_flow_download",
+		ordereddict.NewDict().
+			Set("format", format).
+			Set("client_id", arg.ClientId).
+			Set("flow_id", arg.FlowId))
 
 	result, err := createDownloadFile(
 		ctx, scope, config_obj, format,
@@ -102,9 +103,10 @@ func (self *CreateFlowDownload) Call(ctx context.Context,
 
 func (self CreateFlowDownload) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) *vfilter.FunctionInfo {
 	return &vfilter.FunctionInfo{
-		Name:    "create_flow_download",
-		Doc:     "Creates a download pack for the flow.",
-		ArgType: type_map.AddType(scope, &CreateFlowDownloadArgs{}),
+		Name:     "create_flow_download",
+		Doc:      "Creates a download pack for the flow.",
+		ArgType:  type_map.AddType(scope, &CreateFlowDownloadArgs{}),
+		Metadata: vql.VQLMetadata().Permissions(acls.PREPARE_RESULTS).Build(),
 	}
 }
 
@@ -163,9 +165,10 @@ func (self *CreateHuntDownload) Call(ctx context.Context,
 
 func (self CreateHuntDownload) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) *vfilter.FunctionInfo {
 	return &vfilter.FunctionInfo{
-		Name:    "create_hunt_download",
-		Doc:     "Creates a download pack for a hunt.",
-		ArgType: type_map.AddType(scope, &CreateHuntDownloadArgs{}),
+		Name:     "create_hunt_download",
+		Doc:      "Creates a download pack for a hunt.",
+		ArgType:  type_map.AddType(scope, &CreateHuntDownloadArgs{}),
+		Metadata: vql.VQLMetadata().Permissions(acls.PREPARE_RESULTS).Build(),
 	}
 }
 
@@ -181,8 +184,7 @@ func createDownloadFile(
 		return nil, errors.New("Client Id and Flow Id should be specified.")
 	}
 
-	hostname := services.GetHostname(
-		ctx, config_obj, client_id) + "-" + client_id
+	hostname := services.GetHostname(ctx, config_obj, client_id)
 	flow_path_manager := paths.NewFlowPathManager(client_id, flow_id)
 	download_file := flow_path_manager.GetDownloadsFile(hostname, password != "")
 	if name != "" {
@@ -287,7 +289,8 @@ func downloadFlowToZip(
 		return err
 	}
 
-	flow_details, err := launcher.GetFlowDetails(config_obj, client_id, flow_id)
+	flow_details, err := launcher.GetFlowDetails(
+		ctx, config_obj, client_id, flow_id)
 	if err == nil {
 		err = zip_writer.WriteJSON(
 			paths.ZipPathFromFSPathSpec(prefix.AddChild("collection_context")),
@@ -297,8 +300,8 @@ func downloadFlowToZip(
 		}
 	}
 
-	flow_requests, err := launcher.GetFlowRequests(config_obj,
-		client_id, flow_id, 0, 100)
+	flow_requests, err := launcher.Storage().GetFlowRequests(
+		ctx, config_obj, client_id, flow_id, 0, 100)
 	if err == nil {
 		err = zip_writer.WriteJSON(
 			paths.ZipPathFromFSPathSpec(prefix.AddChild("requests")),
@@ -317,17 +320,19 @@ func downloadFlowToZip(
 	}
 
 	// Copy artifact results
-	for _, name := range flow_details.Context.ArtifactsWithResults {
-		artifact_path_manager, err := artifacts.NewArtifactPathManager(ctx,
-			config_obj, client_id, flow_id, name)
-		if err != nil {
-			continue
-		}
+	if flow_details != nil && flow_details.Context != nil {
+		for _, name := range flow_details.Context.ArtifactsWithResults {
+			artifact_path_manager, err := artifacts.NewArtifactPathManager(ctx,
+				config_obj, client_id, flow_id, name)
+			if err != nil {
+				continue
+			}
 
-		err = copyResultSetIntoContainer(ctx, config_obj, zip_writer, format,
-			artifact_path_manager.Path(), prefix.AddChild("results", name))
-		if err != nil {
-			return err
+			err = copyResultSetIntoContainer(ctx, config_obj, zip_writer, format,
+				artifact_path_manager.Path(), prefix.AddChild("results", name))
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -378,7 +383,6 @@ func copyUploadFiles(
 				if expand_sparse {
 					continue
 				}
-				dest = dest.SetType(api.PATH_TYPE_FILESTORE_SPARSE_IDX)
 			}
 
 			var src api.FSPathSpec
@@ -438,7 +442,7 @@ func copyUploadFiles(
 				// Otherwise we need to look at the filestore
 				// components and derive the client's components from
 				// there.
-			} else if len(components) > 6 && components[0] == "clients" {
+			} else if len(components) > 4 && components[0] == "clients" {
 				//Remove the prefix in the file store where the files
 				//are stored. The uploads file in the file store
 				//refers to the location in the filestore where the
@@ -490,6 +494,12 @@ func copyUploadFiles(
 				src = flow_path_manager.UploadContainer().AddChild(components[1:]...).
 					SetType(api.PATH_TYPE_FILESTORE_ANY)
 				dest = dest.AddChild(components...)
+			}
+
+			// This is an index row, copy the index file to the zip.
+			if file_type == "idx" {
+				src = src.SetType(api.PATH_TYPE_FILESTORE_SPARSE_IDX)
+				dest = dest.SetType(api.PATH_TYPE_FILESTORE_SPARSE_IDX)
 			}
 
 			// Copy from the file store at these locations.

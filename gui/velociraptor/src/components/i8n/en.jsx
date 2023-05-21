@@ -3,7 +3,7 @@ import Alert from 'react-bootstrap/Alert';
 import humanizeDuration from "humanize-duration";
 
 const English = {
-    SEARCH_CLIENTS: "Search clients",
+    "SEARCH_CLIENTS": "Search clients",
     "Quarantine description": <>
           <p>You are about to quarantine this host.</p>
           <p>
@@ -59,6 +59,7 @@ const English = {
         return "Edit Artifact " + name;
     },
     "Notebook for Collection": name=>"Notebook for Collection "+name,
+    "Import Artifacts": length=><>Import {length} Artifacts</>,
     "ArtifactDeletionDialog": (session_id, artifacts, total_bytes, total_rows)=>
     <>
       You are about to permanently delete the artifact collection
@@ -168,7 +169,7 @@ const English = {
       event artifacts targetting that group.
     </>,
     "Deutsch": "German",
-    "_ts": "Server Time",
+    "_ts": "ServerTime",
     "TablePagination": (from, to, size)=>
     <>Showing { from } to { to } of { size }</>,
     "Verified Email" : "Verified Email",
@@ -179,7 +180,7 @@ const English = {
     "Role_analyst" : "Analyst",
     "Role_investigator" : "Investigator",
     "Role_artifact_writer" : "Artifact Writer",
-    "Role_api" : "Read-Only API Client",
+    "Role_api" : "API Client",
     "ToolRole_administrator" :
     <>
     Like any system, Velociraptor needs an administrator which is all powerful. This account can run arbitrary VQL on the server, reconfigure the server, etc.  The ability to add/create/edit/remove users is dependent on the organizations to which this account belongs.
@@ -206,7 +207,7 @@ const English = {
     </>,
     "ToolRole_api" :
     <>
-    This role provides the ability to read previously collected results but does not allow the user to actually make any changes.
+    This role is required to provide the ability for the user to connect over the API port.
     </>,
 
     "Perm_ALL_QUERY" : "All Query",
@@ -215,6 +216,7 @@ const English = {
     "Perm_READ_RESULTS" : "Read results",
     "Perm_LABEL_CLIENT" : "Label Clients",
     "Perm_COLLECT_CLIENT" : "Collect Client",
+    "Perm_START_HUNT" : "Start Hunt",
     "Perm_COLLECT_SERVER" : "Collect Server",
     "Perm_ARTIFACT_WRITER" : "Artifact Writer",
     "Perm_SERVER_ARTIFACT_WRITER" : "Server Artifact Writer",
@@ -227,6 +229,7 @@ const English = {
     "Perm_FILESYSTEM_WRITE" : "Filesystem Write",
     "Perm_MACHINE_STATE" : "Machine State",
     "Perm_PREPARE_RESULTS" : "Prepare Results",
+    "Perm_DELETE_RESULTS" : "Delete Results",
     "Perm_DATASTORE_ACCESS" : "Datastore Access",
 
 
@@ -236,6 +239,7 @@ const English = {
     "ToolPerm_READ_RESULTS" : "Read results from already run hunts, flows, or notebooks",
     "ToolPerm_LABEL_CLIENT" : "Can manipulate client labels and metadata",
     "ToolPerm_COLLECT_CLIENT" : "Schedule or cancel new collections on clients",
+    "ToolPerm_START_HUNT" : "Start a new hunt",
     "ToolPerm_COLLECT_SERVER" : "Schedule new artifact collections on Velociraptor servers",
     "ToolPerm_ARTIFACT_WRITER" : "Add or edit custom artifacts that run on the server",
     "ToolPerm_SERVER_ARTIFACT_WRITER" : "Add or edit custom artifacts that run on the server",
@@ -248,10 +252,8 @@ const English = {
     "ToolPerm_FILESYSTEM_WRITE" : "Allowed to create files on the filesystem",
     "ToolPerm_MACHINE_STATE" : "Allowed to collect state information from machines (e.g. pslist())",
     "ToolPerm_PREPARE_RESULTS" : "Allowed to create zip files",
+    "ToolPerm_DELETE_RESULTS" : "Allowed to delete clients, flows and other data",
     "ToolPerm_DATASTORE_ACCESS" : " Allowed raw datastore access",
-
-
-
 
     "ToolUsernamePasswordless" :
     <>

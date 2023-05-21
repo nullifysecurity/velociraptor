@@ -26,15 +26,15 @@ import (
 	"strings"
 
 	"github.com/Velocidex/ordereddict"
-	"github.com/sirupsen/logrus"
 	"www.velocidex.com/golang/velociraptor/accessors"
 	"www.velocidex.com/golang/velociraptor/acls"
 	"www.velocidex.com/golang/velociraptor/datastore"
 	"www.velocidex.com/golang/velociraptor/file_store"
 	"www.velocidex.com/golang/velociraptor/file_store/api"
 	"www.velocidex.com/golang/velociraptor/file_store/path_specs"
-	"www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/paths"
+	"www.velocidex.com/golang/velociraptor/services"
+	"www.velocidex.com/golang/velociraptor/vql"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/vfilter"
 	"www.velocidex.com/golang/vfilter/arg_parser"
@@ -79,10 +79,9 @@ func (self *DeleteFileStore) Call(ctx context.Context,
 
 	vfs_path := arg.VFSPath.Reduce(ctx)
 	principal := vql_subsystem.GetPrincipal(scope)
-	logging.LogAudit(config_obj, principal, "file_store_delete",
-		logrus.Fields{
-			"vfs": vfs_path,
-		})
+	services.LogAudit(ctx,
+		config_obj, principal, "file_store_delete",
+		ordereddict.NewDict().Set("vfs", vfs_path))
 
 	switch t := vfs_path.(type) {
 	case *path_specs.DSPathSpec:
@@ -131,9 +130,10 @@ func (self *DeleteFileStore) Call(ctx context.Context,
 
 func (self DeleteFileStore) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) *vfilter.FunctionInfo {
 	return &vfilter.FunctionInfo{
-		Name:    "file_store_delete",
-		Doc:     "Delete file store paths into full filesystem paths. ",
-		ArgType: type_map.AddType(scope, &DeleteFileStoreArgs{}),
+		Name:     "file_store_delete",
+		Doc:      "Delete file store paths into full filesystem paths. ",
+		ArgType:  type_map.AddType(scope, &DeleteFileStoreArgs{}),
+		Metadata: vql.VQLMetadata().Permissions(acls.SERVER_ADMIN).Build(),
 	}
 }
 
