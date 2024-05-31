@@ -9,6 +9,7 @@ import (
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/constants"
 	"www.velocidex.com/golang/velociraptor/json"
+	"www.velocidex.com/golang/velociraptor/utils"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/vfilter"
 	"www.velocidex.com/golang/vfilter/arg_parser"
@@ -25,6 +26,9 @@ type RemappingFunc struct{}
 func (self RemappingFunc) Call(ctx context.Context,
 	scope vfilter.Scope,
 	args *ordereddict.Dict) vfilter.Any {
+
+	defer vql_subsystem.RegisterMonitor("remap", args)()
+
 	arg := &RemappingArgs{}
 	err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
 	if err != nil {
@@ -37,6 +41,13 @@ func (self RemappingFunc) Call(ctx context.Context,
 	if err != nil {
 		scope.Log("remap: %v", err)
 		return vfilter.Null{}
+	}
+
+	// It is possible that yaml.UnmarshalStrict can unmarshal nil!
+	for _, remap := range config_obj.Remappings {
+		if utils.IsNil(remap) {
+			return vfilter.Null{}
+		}
 	}
 
 	remapping_config := config_obj.Remappings
@@ -65,14 +76,23 @@ func (self RemappingFunc) Call(ctx context.Context,
 
 	// Reset the scope to default for remapping accessors.
 	pristine_scope := scope.Copy()
+	device_manager := accessors.GetDefaultDeviceManager(config_obj).Copy()
 	pristine_scope.AppendVars(ordereddict.NewDict().
-		Set(constants.SCOPE_DEVICE_MANAGER,
-			accessors.GetDefaultDeviceManager(config_obj).Copy()))
+		Set(constants.SCOPE_DEVICE_MANAGER, device_manager))
 
 	err = ApplyRemappingOnScope(ctx, config_obj, pristine_scope, scope, manager,
 		ordereddict.NewDict(), remapping_config)
 	if err != nil {
+		// If we failed to install the remapping then we need to
+		// ensure there is a null remapping installed. Otherwise VQL
+		// code will continue to use the scope and may access the
+		// original context instead of the remapped context. This may
+		// lead to confusion as files will be read from the original
+		// host not the remapped files.
+
 		scope.Log("remap: %v", err)
+		scope.Log("remap: Failed to apply remapping - will apply an empty remapping to block further processing")
+		manager.Clear()
 		return vfilter.Null{}
 	}
 

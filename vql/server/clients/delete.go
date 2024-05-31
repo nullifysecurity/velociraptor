@@ -58,7 +58,7 @@ func (self DeleteClientPlugin) Call(ctx context.Context,
 
 		config_obj, ok := vql_subsystem.GetServerConfig(scope)
 		if !ok {
-			scope.Log("Command can only run on the server")
+			scope.Log("client_delete: Command can only run on the server")
 			return
 		}
 
@@ -134,7 +134,7 @@ func (self DeleteClientPlugin) Call(ctx context.Context,
 			func(filename api.DSPathSpec) error {
 				err := db.DeleteSubject(config_obj, filename)
 				if err != nil {
-					scope.Log("client_delete: Removig directory %v: %v",
+					scope.Log("client_delete: Removing directory %v: %v",
 						filename.AsClientPath(), err)
 				}
 				return nil

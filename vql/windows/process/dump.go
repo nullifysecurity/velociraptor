@@ -1,8 +1,9 @@
+//go:build windows && cgo
 // +build windows,cgo
 
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+   Copyright (C) 2019-2024 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -35,6 +36,7 @@ import (
 	"unsafe"
 
 	"github.com/Velocidex/ordereddict"
+	"www.velocidex.com/golang/velociraptor/accessors"
 	"www.velocidex.com/golang/velociraptor/acls"
 	"www.velocidex.com/golang/velociraptor/vql"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
@@ -53,6 +55,7 @@ func (self ProcDumpPlugin) Call(
 
 	go func() {
 		defer close(output_chan)
+		defer vql_subsystem.RegisterMonitor("proc_dump", args)()
 
 		err := vql_subsystem.CheckAccess(scope, acls.MACHINE_STATE)
 		if err != nil {
@@ -102,13 +105,22 @@ func (self ProcDumpPlugin) Call(
 			return
 		}
 
+		result := ordereddict.NewDict().
+			Set("FullPath", filename).
+			Set("Pid", arg.Pid)
+
+		os_path, err := accessors.NewWindowsOSPath(filename)
+		if err != nil {
+			result.Set("OSPath", filename)
+		} else {
+			result.Set("OSPath", os_path)
+		}
+
 		select {
 		case <-ctx.Done():
 			return
 
-		case output_chan <- ordereddict.NewDict().
-			Set("FullPath", filename).
-			Set("Pid", arg.Pid):
+		case output_chan <- result:
 		}
 	}()
 

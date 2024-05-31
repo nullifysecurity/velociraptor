@@ -7,6 +7,7 @@ import (
 
 	"www.velocidex.com/golang/velociraptor/acls"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
+	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/services"
 )
 
@@ -39,10 +40,40 @@ func GetOrgIdFromRequest(r *http.Request) string {
 	return org_id
 }
 
-func CheckOrgAccess(r *http.Request, user_record *api_proto.VelociraptorUser) error {
+// Checks to make sure the user has access to the org they
+// requested. If they do not have access to the org they requested we
+// switch them to any org in which they have at least read
+// access. This behaviour ensures that when a user's access is removed
+// from an org the GUI immediately switched to the next available org.
+func CheckOrgAccess(
+	config_obj *config_proto.Config,
+	r *http.Request,
+	user_record *api_proto.VelociraptorUser) error {
+
 	org_id := GetOrgIdFromRequest(r)
 	err := _checkOrgAccess(r, org_id, user_record)
 	if err == nil {
+		return nil
+	}
+
+	ctx := r.Context()
+
+	// Does the user already have a preferred org they want to be in?
+	user_manager := services.GetUserManager()
+	user_options, err := user_manager.GetUserOptions(ctx, user_record.Name)
+	if err != nil {
+		// Not an error - maybe the user never logged in yet
+		user_options = &api_proto.SetGUIOptionsRequest{}
+	}
+
+	// Ok they are allowed to go to their preferred org.
+	err = _checkOrgAccess(r, user_options.Org, user_record)
+	if err == nil {
+		r.Header.Set("Grpc-Metadata-Orgid", user_options.Org)
+
+		// Log them into their org
+		user_options.Org = user_options.Org
+		user_manager.SetUserOptions(ctx, user_record.Name, user_options)
 		return nil
 	}
 
@@ -52,20 +83,9 @@ func CheckOrgAccess(r *http.Request, user_record *api_proto.VelociraptorUser) er
 		if err == nil {
 			r.Header.Set("Grpc-Metadata-Orgid", org.Id)
 
-			// Update the user's org preferences
-			user_manager := services.GetUserManager()
-			user_options, err := user_manager.GetUserOptions(
-				r.Context(), user_record.Name)
-			if err == nil {
-				user_options.Org = org.Id
-			} else {
-				user_options = &api_proto.SetGUIOptionsRequest{
-					Org: org.Id,
-				}
-			}
-			user_manager.SetUserOptions(
-				r.Context(), user_record.Name, user_options)
-
+			// Log them into their org
+			user_options.Org = org.Id
+			user_manager.SetUserOptions(ctx, user_record.Name, user_options)
 			return nil
 		}
 	}
@@ -84,7 +104,8 @@ func _checkOrgAccess(r *http.Request, org_id string, user_record *api_proto.Velo
 		return err
 	}
 
-	perm, err := services.CheckAccess(org_config_obj, user_record.Name, acls.READ_RESULTS)
+	perm, err := services.CheckAccess(
+		org_config_obj, user_record.Name, acls.READ_RESULTS)
 	if err != nil {
 		return err
 	}

@@ -35,8 +35,7 @@ const Vietnamese = {
     "Notebook for Collection": name=>"Ghi chú cho Collection "+name,
     "ArtifactDeletionDialog": (session_id, artifacts, total_bytes, total_rows)=>
     <>
-      Chuẩn bị xoá vĩnh viễn artifact collection
-      <b>{session_id}</b>.
+      Chuẩn bị xoá vĩnh viễn artifact collection <b>{session_id}</b>.
       <br/>
       Collection này có các artifacts <b className="wrapped-text">
          {artifacts}
@@ -70,13 +69,13 @@ const Vietnamese = {
     </>,
     "ServedFromURL": (base_path, url)=>
     <>
-    Máy trạm sẽ tải trực tiếp công cụ từ
-    <a href={base_path + url}>{url}</a> nếu cần thiết. Lưu ý rằng nếu hàm băm không khớp với hàm băm dự kiến, máy trạm sẽ từ chối tệp.
+    Máy trạm sẽ tải trực tiếp công cụ
+    từ <a href={base_path + url}>{url}</a> nếu cần thiết. Lưu ý rằng nếu hàm băm không khớp với hàm băm dự kiến, máy trạm sẽ từ chối tệp.
     </>,
     "ServedFromGithub": (github_project, github_asset_regex)=>
     <>
-    Công cụ sẽ được tải xuống từ GitHub dưới dạng release mới nhất từ
-    <b>{github_project}</b>, phù hợp với <b>{github_asset_regex}</b>
+    Công cụ sẽ được tải xuống từ GitHub dưới dạng release mới nhất
+    từ <b>{github_project}</b>, phù hợp với <b>{github_asset_regex}</b>
     </>,
     "PlaceHolder":
     <>
@@ -443,7 +442,7 @@ const Vietnamese = {
      "Max Execution Time in Seconds": "Thời gian thực hiện tối đa tính bằng giây",
      "Max Idle Time in Seconds": "Thời gian rỗi tối đa tính bằng giây",
      "Max Mb": "Mb tối đa",
-     "Max Mb Uploaded": "Mb tối đa đã tải lên",
+     "Max bytes Uploaded": "Mb tối đa đã tải lên",
      "Max Rows": "Số hàng tối đa",
      "Mb": "Mb",
      "Midnight Inferno (very dark)": "Midnight Inferno (very dark)",
@@ -513,7 +512,6 @@ const Vietnamese = {
      "Properties": "Thuộc tính",
      "Public": "Công khai",
      "Public Key/Cert": "Public Key/Cert",
-     "Public Key/Certificate To Encrypt With. If X509, Defaults To Frontend Cert": "Public Key/Certificate để mã hóa. Nếu X509, Mặc định là Frontend Cert",
      "Quarantine Host": "Cách ly host",
      "Quarantine Message": "Thông báo cách ly",
      "Quarantine host": "Cách ly host",
@@ -592,7 +590,7 @@ const Vietnamese = {
      "Server Event Monitoring: Select artifacts to collect on the server": "Giám sát sự kiện máy chủ: Chọn artifact để thu thập trên máy chủ",
      "Server Events": "Sự kiện máy chủ",
      "Server Side Encryption": "Mã hóa phía máy chủ",
-     "Servr Monitoring": "Giám sát máy chủ",
+     "Server Monitoring": "Giám sát máy chủ",
      "Set All": "Đặt tất cả",
      "Set Serve URL": "Đặt URL tải về",
      "Set a password in user preferences to lock the download file.": "Đặt mật khẩu trong tùy chọn người dùng để khóa tệp tải xuống.",

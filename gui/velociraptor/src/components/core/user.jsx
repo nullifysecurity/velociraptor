@@ -3,6 +3,9 @@ import React from 'react';
 import api from '../core/api-service.jsx';
 import {CancelToken} from 'axios';
 import PropTypes from 'prop-types';
+import qs from "qs";
+import { withRouter }  from "react-router-dom";
+import { JSONparse } from '../utils/json_parse.jsx';
 
 const UserConfig = React.createContext({
     traits: {},
@@ -12,7 +15,7 @@ const UserConfig = React.createContext({
 const POLL_TIME = 5000;
 
 // A component which maintains the user settings
-export class UserSettings extends React.Component {
+class _UserSettings extends React.Component {
     static propTypes = {
         children: PropTypes.node,
     }
@@ -29,7 +32,21 @@ export class UserSettings extends React.Component {
             }
 
             if (traits.org) {
-                window.globals.OrgId = traits.org;
+                // Get the org id from the url if possible. If it is
+                // not in the URL, get the default from the user
+                // traits.
+                let search = window.location.search.replace('?', '');
+                let params = qs.parse(search);
+                let org_id = params.org_id || traits.org;
+
+                window.globals.OrgId = org_id;
+
+                // If the URL does not specify an org, then we need to
+                // set it to the default org from the traits.
+                if (_.isEmpty(params.org_id)) {
+                    window.history.pushState({}, "", api.href("/app/index.html", {}));
+                    this.props.history.replace("/welcome");
+                }
             }
 
             if (traits.auth_redirect_template) {
@@ -46,8 +63,8 @@ export class UserSettings extends React.Component {
             document.body.classList.remove('veloci-light');
             document.body.classList.remove('pink-light');
             document.body.classList.remove('github-dimmed-dark');
-            document.body.classList.remove('github-dimmed-light');
-            document.body.classList.remove('ncurses');
+            document.body.classList.remove('ncurses-light');
+            document.body.classList.remove('ncurses-dark');
             document.body.classList.remove('coolgray-dark');
             document.body.classList.remove('midnight');
             document.body.classList.add(traits.theme || "veloci-light");
@@ -71,7 +88,7 @@ export class UserSettings extends React.Component {
     }
 
     getUserOptions = (traits) => {
-        return JSON.parse(traits.ui_settings || "{}");
+        return JSONparse(traits.ui_settings, {});
     }
 
     render() {
@@ -82,5 +99,7 @@ export class UserSettings extends React.Component {
         );
     }
 };
+
+export const UserSettings = withRouter(_UserSettings);
 
 export default UserConfig;

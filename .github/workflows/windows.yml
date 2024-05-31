@@ -1,14 +1,15 @@
 name: Windows Test
 on: [pull_request]
+
 jobs:
   build:
     name: Windows Test
     runs-on: windows-2019
     steps:
-    - name: Set up Go 1.19
+    - name: Set up Go 1.21
       uses: actions/setup-go@v3
       with:
-        go-version: 1.19
+        go-version: 1.21
       id: go
 
     - name: Check out code into the Go module directory
@@ -44,7 +45,7 @@ jobs:
         go run make.go -v WindowsTest
 
     - name: Prepare second stage
-      if: always()
+      if: success()
       shell: cmd
       # We have to wait a short time between the service creation
       # event to be flushed to disk. Hopefully building the test
@@ -58,6 +59,7 @@ jobs:
         echo "VSStest2 with more data" > c:\Users\test2.txt
         echo Clearing the event logs
         wevtutil.exe cl System
+        wevtutil.exe cl security
 
         echo Create second service.
         sc.exe create TestingDetection2 binPath="%COMSPEC% /Q /c echo 'COMSPEC testing 2"
@@ -76,7 +78,7 @@ jobs:
 
     - name: Test Golden Generic
       shell: cmd
-      if: always()
+      if: success()
       # We depend on the second service logs to be flushed to disk -
       # hopefulling the unit tests take long enough for this to
       # happen.
@@ -92,7 +94,7 @@ jobs:
 
     - name: Test Golden Windows
       shell: cmd
-      if: always()
+      if: success()
       run: |
         echo Running windows specific tests.
         output\velociraptor.exe -v golden X:\artifacts\testdata\windows\ --env srcDir=X:\ --config X:\artifacts\testdata\windows\github_actions.config.yaml

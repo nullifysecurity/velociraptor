@@ -7,6 +7,8 @@ import (
 	errors "github.com/go-errors/errors"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"www.velocidex.com/golang/velociraptor/acls"
+	"www.velocidex.com/golang/velociraptor/utils"
 )
 
 // Convert from various errors into gRPC status errors. This will be
@@ -16,6 +18,19 @@ func Status(verbose bool, err error) error {
 	_, ok := status.FromError(err)
 	if ok {
 		return err
+	}
+
+	// Do not report this error.
+	if err == utils.InlineError {
+		return nil
+	}
+
+	if errors.Is(err, acls.PermissionDenied) {
+		return status.Error(codes.PermissionDenied, err.Error())
+	}
+
+	if errors.Is(err, utils.InvalidStatus) {
+		return status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	// With the verbose flag give more detailed errors to the browser.
@@ -38,8 +53,8 @@ func Status(verbose bool, err error) error {
 	return status.Error(codes.Unavailable, err.Error())
 }
 
-func InvalidStatus(msg string) error {
-	return status.Error(codes.InvalidArgument, msg)
+func InvalidStatus(message string) error {
+	return fmt.Errorf("%w: %s", utils.InvalidStatus, message)
 }
 
 func PermissionDenied(err error, message string) error {

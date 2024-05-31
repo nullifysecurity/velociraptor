@@ -12,10 +12,7 @@ type: SERVER_EVENT
 
 sources:
   - name: Prometheus
-
-    # This artifact is populated by the frontend service using the
-    # total of all frontend metrics.
-    query: SELECT * FROM info() WHERE FALSE
+    query: SELECT sleep(time=10000000) FROM scope()
 
 reports:
   - type: SERVER_EVENT
@@ -33,6 +30,7 @@ reports:
               MemoryUse / 1048576 AS MemoryUse,
               TotalFrontends
           FROM source(source="Prometheus",
+                      start_time=StartTime, end_time=EndTime,
                       artifact="Server.Monitor.Health")
       {{ end }}
 
@@ -43,13 +41,14 @@ reports:
                SELECT _ts as Timestamp,
                   client_comms_current_connections
                FROM source(source="Prometheus",
+                           start_time=StartTime, end_time=EndTime,
                            artifact="Server.Monitor.Health")
             })
       {{ end }}
 
-      {{ $time := Query "SELECT timestamp(epoch=now()) AS Now FROM scope()" | Expand }}
-
-      ## Server status @ {{ Get $time "0.Now" }}
+      {{ $time_rows := Query "SELECT timestamp(epoch=now()) AS Now FROM scope()" | Expand }}
+      {{ $time := Get $time_rows "0.Now" }}
+      ## Server status @ <velo-value value="{{ $time.Format "2006-01-02T15:04:05Z07:00" }}" />
 
       <p>The following are total across all frontends.</p>
           <span class="container">
@@ -69,7 +68,7 @@ reports:
 
       {{ Query "LET ColumnTypes <= dict(ClientConfig='url_internal') \
                 SELECT Name, OrgId, \
-                       format(format='[%s](/notebooks/Dashboards/%s/uploads/client.%s.config.yaml)', \
+                       format(format='[%s](/notebooks/Dashboards/%s/uploads/data/client.%s.config.yaml)', \
                        args=[OrgId, ArtifactName, OrgId]) AS ClientConfig, \
                        upload(accessor='data', file=_client_config, \
                               name='client.'+OrgId+'.config.yaml') AS _Upload \

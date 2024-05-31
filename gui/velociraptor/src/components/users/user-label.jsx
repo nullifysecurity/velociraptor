@@ -2,6 +2,7 @@ import './user-label.css';
 import _ from 'lodash';
 import moment from 'moment';
 import 'moment-timezone';
+import qs from "qs";
 
 import React from 'react';
 import PropTypes from 'prop-types';
@@ -20,13 +21,13 @@ import Col from 'react-bootstrap/Col';
 import Row from 'react-bootstrap/Row';
 import api from '../core/api-service.jsx';
 import {CancelToken} from 'axios';
-import VeloForm from '../forms/form.jsx';
 import T from '../i8n/i8n.jsx';
 import OverlayTrigger from 'react-bootstrap/OverlayTrigger';
 import Tooltip from 'react-bootstrap/Tooltip';
 import InputGroup from 'react-bootstrap/InputGroup';
 import Select from 'react-select';
 
+import { JSONparse } from '../utils/json_parse.jsx';
 
 class _PasswordChange extends React.Component {
     static propTypes = {
@@ -143,7 +144,7 @@ class UserSettings extends React.PureComponent {
                 theme: this.context.traits.theme || "veloci-light",
                 timezone: this.context.traits.timezone || "UTC",
                 lang: this.context.traits.lang || "en",
-                org: this.context.traits.org || "root",
+                org: window.globals.OrgId,
                 default_password: this.context.traits.default_password || "",
             });
         }
@@ -155,6 +156,7 @@ class UserSettings extends React.PureComponent {
         default_password: "",
         org: "",
         org_changed: false,
+        edited: false
     }
 
     saveSettings = ()=> {
@@ -168,10 +170,19 @@ class UserSettings extends React.PureComponent {
     }
 
     changeOrg = org=>{
-        // Force navigation to the
-        // welcome screen to make sure
-        // the GUI is reset
-        this.props.history.push("/welcome");
+        // Set the URL to the required org_id
+        let search = window.location.search.replace('?', '');
+        let params = qs.parse(search);
+        params.org_id = org;
+        window.globals.OrgId = org;
+
+        // Force navigation to the welcome screen to make sure the GUI
+        // is reset.
+        window.history.pushState({}, "", api.href("/app/index.html", {}));
+        this.props.history.replace("/welcome");
+
+        // Set the new settings for the next reload. This will be the
+        // default org id next time the user loads up the main page.
         this.props.setSetting({
             theme: this.state.theme,
             timezone: this.state.timezone,
@@ -183,6 +194,7 @@ class UserSettings extends React.PureComponent {
     }
 
     render() {
+
         return (
             <Modal show={true}
                    dialogClassName="modal-70w"
@@ -197,8 +209,8 @@ class UserSettings extends React.PureComponent {
                       <OverlayTrigger
                         delay={{show: 250, hide: 400}}
                         overlay={(props)=><Tooltip {...props}>
-                                  {T("Switch to a different org")}
-                                </Tooltip>}>
+                                            {T("Switch to a different org")}
+                                          </Tooltip>}>
                         <div>{T("Organization")}</div>
                       </OverlayTrigger>
                     </Form.Label>
@@ -206,8 +218,7 @@ class UserSettings extends React.PureComponent {
                       <Form.Control as="select"
                                     value={this.state.org}
                                     placeholder={T("Select an org")}
-                                    onChange={e=>this.changeOrg(e.currentTarget.value)}
-                  >
+                                    onChange={e=>this.changeOrg(e.currentTarget.value)}>
                         {_.map(this.context.traits.orgs || [], function(x) {
                             return <option key={x.id} value={x.id}>{x.name}</option>;
                         })}
@@ -240,21 +251,51 @@ class UserSettings extends React.PureComponent {
                       <option value="veloci-dark">{T("Velociraptor (dark)")}</option>
                       <option value="no-theme">{T("Velociraptor Classic (light)")}</option>
                       <option value="pink-light">{T("Strawberry Milkshake (light)")}</option>
-                      <option value="ncurses">{T("Ncurses (light)")}</option>
+                      <option value="ncurses-light">{T("Ncurses (light)")}</option>
+                      <option value="ncurses-dark">{T("Ncurses (dark)")}</option>
+                      {/* <option value="github-light">{T("Github (light)")}</option> */}
                       <option value="github-dimmed-dark">{T("Github dimmed (dark)")}</option>
                       <option value="coolgray-dark">{T("Cool Gray (dark)")}</option>
                       <option value="midnight">{T("Midnight Inferno (very dark)")}</option>
                     </Form.Control>
                   </Col>
                 </Form.Group>
-                <VeloForm
-                  param={{name: "Downloads Password",
-                          friendly_name: T("Downloads Password"),
-                          description: T("Default password to use for downloads"),
-                          type: "string"}}
-                  value={this.state.default_password}
-                  setValue={value=>this.setState({default_password: value})}
-                />
+
+                <Form.Group as={Row}>
+                  <Form.Label column sm="3">
+                    <OverlayTrigger
+                      delay={{show: 250, hide: 400}}
+                      overlay={(props)=><Tooltip {...props}>
+                                                {T("Default password to use for downloads")}
+                                              </Tooltip>}>
+                      <div>{T("Downloads Password")}</div>
+                    </OverlayTrigger>
+                  </Form.Label>
+                  <Col sm="8">
+                    <InputGroup className="mb-3">
+                      <Form.Control
+                        type="text"
+                        placeholder = {(this.state.default_password)}
+                        onChange = {e => {this.setState({"edited": true});
+                                          this.setState({
+                                              default_password: e.currentTarget.value
+                                          });
+                                         }}/>
+                      <div className="input-group-append">
+                        <Button as="button" variant="default"
+                                disabled = {!this.state.edited}
+                                onClick={e => {
+                                    this.props.setSetting({
+                                        default_password: this.state.default_password
+                                    });
+                                    this.setState({"edited": false});
+                                }}>
+                          <FontAwesomeIcon icon="save" />
+                        </Button>
+                      </div>
+                    </InputGroup></Col>
+                </Form.Group>
+
                 <Form.Group as={Row}>
                   <Form.Label column sm="3">
                     <OverlayTrigger
@@ -374,10 +415,10 @@ export default class UserLabel extends React.Component {
 
     setSettings = (options) => {
         // Set the ACE theme according to the theme so they match.
-        let ace_options = JSON.parse(this.context.traits.ui_settings || "{}");
+        let ace_options = JSONparse(this.context.traits.ui_settings, {});
         if (options.theme === "no-theme") {
             ace_options.theme = "ace/theme/xcode";
-            ace_options.fontFamily = "monospace";
+            ace_options.fontFamily = "Iosevka Term";
         } else if (options.theme === "veloci-dark") {
             ace_options.theme = "ace/theme/vibrant_ink";
             ace_options.fontFamily = "Iosevka Term";
@@ -390,17 +431,23 @@ export default class UserLabel extends React.Component {
         } else if(options.theme === "ncurses") {
             ace_options.theme = "ace/theme/sqlserver";
             ace_options.fontFamily = "fixedsys";
+        } else if(options.theme === "ncurses-dark") {
+            ace_options.theme = "ace/theme/tomorrow_night_eighties";
+            ace_options.fontFamily = "fixedsys";
+        } else if(options.theme === "github-default-light") {
+            ace_options.theme = "ace/theme/dracula";
+            ace_options.fontFamily = "Iosevka Term";
         } else if(options.theme === "github-dimmed-dark") {
           ace_options.theme = "ace/theme/dracula";
           ace_options.fontFamily = "Iosevka Term";
-        } else if(options.theme === "github-dimmed-light") {
+        } else if(options.theme === "github-default-light") {
           ace_options.theme = "ace/theme/sqlserver";
           ace_options.fontFamily = "Iosevka Term";
         } else if(options.theme === "coolgray-dark") {
           ace_options.theme = "ace/theme/nord_dark";
           ace_options.fontFamily = "Iosevka Term";
         } else if(options.theme === "midnight") {
-          ace_options.theme = "ace/theme/vibrant_ink";
+          ace_options.theme = "ace/theme/terminal";
           ace_options.fontFamily = "Iosevka Term";
         }
         options.options = JSON.stringify(ace_options);
@@ -420,7 +467,8 @@ export default class UserLabel extends React.Component {
     }
 
     orgName() {
-        let id = this.context.traits && this.context.traits.org;
+        let id = window.globals.OrgId || (
+            this.context.traits && this.context.traits.org);
         if (!id || id==="root") {
             return <></>;
         }

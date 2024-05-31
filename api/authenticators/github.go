@@ -1,6 +1,6 @@
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+   Copyright (C) 2019-2024 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -64,9 +64,9 @@ func (self *GitHubAuthenticator) AuthRedirectTemplate() string {
 
 func (self *GitHubAuthenticator) AddHandlers(mux *http.ServeMux) error {
 	mux.Handle(utils.Join(self.base, "/auth/github/login"),
-		self.oauthGithubLogin())
+		IpFilter(self.config_obj, self.oauthGithubLogin()))
 	mux.Handle(utils.Join(self.base, "/auth/github/callback"),
-		self.oauthGithubCallback())
+		IpFilter(self.config_obj, self.oauthGithubCallback()))
 	return nil
 }
 

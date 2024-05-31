@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Velocidex/ordereddict"
+	errors "github.com/go-errors/errors"
 	"www.velocidex.com/golang/velociraptor/json"
 	"www.velocidex.com/golang/velociraptor/utils"
 	"www.velocidex.com/golang/vfilter"
@@ -50,6 +51,14 @@ type OSPath struct {
 	pathspec    *PathSpec
 	serialized  *string
 	Manipulator PathManipulator
+}
+
+func (self *OSPath) Equal(other *OSPath) bool {
+	if !utils.StringSliceEq(self.Components, other.Components) {
+		return false
+	}
+
+	return self.String() == other.String()
 }
 
 func (self *OSPath) DescribeType() string {
@@ -288,10 +297,35 @@ type FileInfo interface {
 	Mode() os.FileMode
 }
 
+// Some filesystems return multiple files with the same basename. They
+// should implement this interface so we can properly dedup based on a
+// unique name.
+type UniqueBasename interface {
+	UniqueName() string
+}
+
 // A File reader with
 type ReadSeekCloser interface {
 	io.ReadSeeker
 	io.Closer
+}
+
+// Some files are not really seekable (although they may pretend to
+// be). Sometimes it is important to know if the file may be rewound
+// back if we read from it - before we actually read from it. If a
+// ReadSeekCloser also implements the Seekable interface it may report
+// if it can be seeked.
+type Seekable interface {
+	IsSeekable() bool
+}
+
+func IsSeekable(fd ReadSeekCloser) bool {
+	seekable, ok := fd.(Seekable)
+	if ok {
+		return seekable.IsSeekable()
+	}
+
+	return true
 }
 
 // Interface for accessing the filesystem.
@@ -312,4 +346,32 @@ type FileSystemAccessor interface {
 	OpenWithOSPath(path *OSPath) (ReadSeekCloser, error)
 	LstatWithOSPath(path *OSPath) (FileInfo, error)
 	New(scope vfilter.Scope) (FileSystemAccessor, error)
+}
+
+// Some filesystems can attempt to retrieve the underlying file. If
+// this interface exists on the accessor **and** the
+// GetUnderlyingAPIFilename() call succeeds, then it should be
+// possible to directly access the returned filename using the OS
+// APIs.
+type RawFileAPIAccessor interface {
+	GetUnderlyingAPIFilename(path *OSPath) (string, error)
+}
+
+var (
+	NotRawFileSystem = errors.New("NotRawFileSystem")
+)
+
+func GetUnderlyingAPIFilename(accessor string,
+	scope vfilter.Scope, path *OSPath) (string, error) {
+	accessor_obj, err := GetAccessor(accessor, scope)
+	if err != nil {
+		return "", err
+	}
+
+	raw_accessor, ok := accessor_obj.(RawFileAPIAccessor)
+	if !ok {
+		return "", NotRawFileSystem
+	}
+
+	return raw_accessor.GetUnderlyingAPIFilename(path)
 }

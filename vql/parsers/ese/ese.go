@@ -1,6 +1,6 @@
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+   Copyright (C) 2019-2024 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -65,6 +65,7 @@ func (self _SRUMLookupId) Call(
 	ctx context.Context, scope vfilter.Scope,
 	args *ordereddict.Dict) vfilter.Any {
 
+	defer vql_subsystem.RegisterMonitor("srum_lookup_id", args)()
 	defer utils.RecoverVQL(scope)
 
 	arg := &_SRUMLookupIdArgs{}
@@ -196,6 +197,7 @@ func (self _ESEPlugin) Call(
 	go func() {
 		defer close(output_chan)
 		defer utils.RecoverVQL(scope)
+		defer vql_subsystem.RegisterMonitor("parse_ese", args)()
 
 		arg := &_ESEArgs{}
 		err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)

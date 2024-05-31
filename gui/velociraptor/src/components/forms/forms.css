@@ -40,3 +40,17 @@ input[type="checkbox"][value="Y"] {
     border-color: var(--color-btn-default-background-hover);
     background-color: var(--accent-color);
 }
+
+.full-width {
+    width: 100%;
+}
+
+
+.react-datetime-picker.btn-group {
+    height: 38px;
+}
+
+.react-datetime-picker.btn-group  .react-datetime-picker__wrapper {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+}

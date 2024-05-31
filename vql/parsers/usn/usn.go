@@ -30,6 +30,7 @@ func (self USNPlugin) Call(
 	go func() {
 		defer close(output_chan)
 		defer utils.RecoverVQL(scope)
+		defer vql_subsystem.RegisterMonitor("parse_usn", args)()
 
 		arg := &USNPluginArgs{}
 		err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
@@ -98,6 +99,7 @@ func (self WatchUSNPlugin) Call(
 	go func() {
 		defer close(output_chan)
 		defer utils.RecoverVQL(scope)
+		defer vql_subsystem.RegisterMonitor("watch_yaml", args)()
 
 		arg := &WatchUSNPluginArgs{}
 		err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
@@ -176,7 +178,7 @@ func makeUSNRecord(item *ntfs.USN_RECORD) *ordereddict.Dict {
 		Set("Timestamp", item.TimeStamp().Time).
 		Set("Filename", item.Filename()).
 		Set("_Links", links).
-		Set("FullPath", fullpath).
+		Set("OSPath", fullpath).
 		Set("FileAttributes", item.FileAttributes()).
 		Set("Reason", item.Reason()).
 		Set("SourceInfo", item.SourceInfo()).

@@ -1,4 +1,4 @@
-LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts/testdata/files/', srcDir+'/artifacts/testdata/files/test.ntfs.dd', srcDir+'/artifacts/testdata/files/test.ntfs.dd', srcDir+'/artifacts/testdata/files/test.ntfs.dd', srcDir+'/artifacts/testdata/files/UsrClass.dat' ]), clear=TRUE)[]SELECT Hostname, Fqdn, OS, expand(path="%SystemRoot%\\System32") FROM info()[
+LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts/testdata/files/', srcDir+'/artifacts/testdata/files/test.ntfs.dd', srcDir+'/artifacts/testdata/files/test.ntfs.dd', srcDir+'/artifacts/testdata/files/test.ntfs.dd', srcDir+'/artifacts/testdata/files/UsrClass.dat', srcDir+'/artifacts/testdata/files/ntuser.dat' ]), clear=TRUE)[]SELECT Hostname, Fqdn, OS, expand(path="%SystemRoot%\\System32") FROM info()[
  {
   "Hostname": "Virtual Host",
   "Fqdn": "Virtual Host",
@@ -127,7 +127,8 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
      "Id": 0,
      "Inode": "46-16-0",
      "Size": 72,
-     "Name": ""
+     "Name": "",
+     "Resident": true
     },
     {
      "Type": "$FILE_NAME",
@@ -135,7 +136,8 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
      "Id": 3,
      "Inode": "46-48-3",
      "Size": 124,
-     "Name": ""
+     "Name": "",
+     "Resident": true
     },
     {
      "Type": "$OBJECT_ID",
@@ -143,7 +145,8 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
      "Id": 4,
      "Inode": "46-64-4",
      "Size": 16,
-     "Name": ""
+     "Name": "",
+     "Resident": true
     },
     {
      "Type": "$DATA",
@@ -151,7 +154,8 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
      "Id": 1,
      "Inode": "46-128-1",
      "Size": 12,
-     "Name": ""
+     "Name": "",
+     "Resident": true
     },
     {
      "Type": "$DATA",
@@ -159,18 +163,21 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
      "Id": 5,
      "Inode": "46-128-5",
      "Size": 20,
-     "Name": "goodbye.txt"
+     "Name": "goodbye.txt",
+     "Resident": true
     }
    ],
    "Hardlinks": [
     "Folder A\\Folder B\\Hello world text document.txt"
    ],
-   "Device": "\\\\.\\C:"
+   "Device": "\\\\.\\C:",
+   "OSPath": "\\\\.\\C:\\Folder A\\Folder B\\Hello world text document.txt"
   }
  }
 ]SELECT * FROM parse_ntfs_i30( accessor='ntfs', device='c:/$MFT', inode="41-144-1")[
  {
   "MFTId": "45",
+  "SequenceNumber": 0,
   "Mtime": "2018-09-24T07:55:44.4592119Z",
   "Atime": "2022-03-18T04:09:07.2885951Z",
   "Ctime": "2018-09-24T07:55:20.6489276Z",
@@ -188,9 +195,16 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
  }
 ]SELECT * FROM parse_ntfs_ranges(accessor='ntfs', device='c:/$MFT', inode="46-128-5")[
  {
-  "Offset": 0,
+  "Type": "MappedReader",
+  "Level": 0,
+  "FromOffset": 0,
+  "ToOffset": 0,
   "Length": 20,
-  "IsSparse": false
+  "CompressedLength": 0,
+  "IsSparse": false,
+  "ClusterSize": 1,
+  "Reader": "*bytes.Reader",
+  "String": " 0 MappedReader: FileOffset 0 -\u003e DiskOffset 0 (Length 20,  Cluster 1) Delegate *bytes.Reader"
  }
 ]SELECT OSPath FROM glob(accessor='registry', globs="/HKLM/*/xbox*")[
  {
@@ -225,6 +239,16 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
  },
  {
   "OSPath": "HKEY_LOCAL_MACHINE\\Classes\\xboxgames"
+ }
+]SELECT OSPath, IsDir FROM glob(accessor='registry', globs="/HKLM/Classes/Foobar")[
+ {
+  "OSPath": "HKEY_LOCAL_MACHINE\\Classes\\Foobar",
+  "IsDir": true
+ }
+]SELECT OSPath, IsDir FROM glob(accessor='registry', globs="/HKLM/Classes/Foobar/*")[
+ {
+  "OSPath": "HKEY_LOCAL_MACHINE\\Classes\\Foobar\\Microsoft",
+  "IsDir": true
  }
 ]SELECT read_file(filename="hello world", accessor="data") FROM scope()[
  {

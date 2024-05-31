@@ -1,19 +1,19 @@
 /*
-   Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+Velociraptor - Dig Deeper
+Copyright (C) 2019-2024 Rapid7 Inc.
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published
-   by the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package api
 
@@ -21,16 +21,12 @@ import (
 	"context"
 	"errors"
 	"os"
-	"regexp"
 	"time"
 
 	"github.com/Velocidex/ordereddict"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"www.velocidex.com/golang/velociraptor/acls"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
-	"www.velocidex.com/golang/velociraptor/datastore"
-	flows_proto "www.velocidex.com/golang/velociraptor/flows/proto"
-	"www.velocidex.com/golang/velociraptor/paths"
 	"www.velocidex.com/golang/velociraptor/services"
 )
 
@@ -56,19 +52,36 @@ func (self *ApiServer) GetClientMetadata(
 			"User is not allowed to view clients.")
 	}
 
-	client_path_manager := paths.NewClientPathManager(in.ClientId)
-	db, err := datastore.GetDB(org_config_obj)
+	client_info_manager, err := services.GetClientInfoManager(org_config_obj)
 	if err != nil {
 		return nil, Status(self.verbose, err)
 	}
 
-	result := &api_proto.ClientMetadata{}
-	err = db.GetSubject(org_config_obj, client_path_manager.Metadata(), result)
+	result := &api_proto.ClientMetadata{
+		ClientId: in.ClientId,
+	}
+
+	client_metadata, err := client_info_manager.GetMetadata(ctx, in.ClientId)
 	if errors.Is(err, os.ErrNotExist) {
 		// Metadata not set, start with empty set.
 		err = nil
 	}
-	return result, err
+	if err != nil {
+		return nil, Status(self.verbose, err)
+	}
+
+	for _, k := range client_metadata.Keys() {
+		v, _ := client_metadata.GetString(k)
+		if v != "" {
+			result.Items = append(result.Items,
+				&api_proto.ClientMetadataItem{
+					Key:   k,
+					Value: v,
+				})
+		}
+	}
+
+	return result, nil
 }
 
 func (self *ApiServer) SetClientMetadata(
@@ -161,55 +174,4 @@ func (self *ApiServer) GetClient(
 	}
 
 	return api_client, nil
-}
-
-func (self *ApiServer) GetClientFlows(
-	ctx context.Context,
-	in *api_proto.ApiFlowRequest) (*api_proto.ApiFlowResponse, error) {
-
-	users := services.GetUserManager()
-	user_record, org_config_obj, err := users.GetUserFromContext(ctx)
-	if err != nil {
-		return nil, Status(self.verbose, err)
-	}
-
-	user_name := user_record.Name
-	permissions := acls.READ_RESULTS
-	perm, err := services.CheckAccess(org_config_obj, user_name, permissions)
-	if !perm || err != nil {
-		return nil, PermissionDenied(err,
-			"User is not allowed to view flows.")
-	}
-
-	filter := func(flow *flows_proto.ArtifactCollectorContext) bool {
-		return true
-	}
-
-	if in.Artifact != "" {
-		regex, err := regexp.Compile(in.Artifact)
-		if err != nil {
-			return nil, Status(self.verbose, err)
-		}
-
-		filter = func(flow *flows_proto.ArtifactCollectorContext) bool {
-			if flow.Request == nil {
-				return false
-			}
-
-			for _, name := range flow.Request.Artifacts {
-				if regex.MatchString(name) {
-					return true
-				}
-			}
-			return false
-		}
-	}
-
-	launcher, err := services.GetLauncher(org_config_obj)
-	if err != nil {
-		return nil, Status(self.verbose, err)
-	}
-
-	return launcher.GetFlows(ctx, org_config_obj, in.ClientId,
-		in.IncludeArchived, filter, in.Offset, in.Count)
 }

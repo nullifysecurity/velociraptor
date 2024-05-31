@@ -54,7 +54,7 @@ func PushMetrics(ctx context.Context, wg *sync.WaitGroup,
 			case <-ctx.Done():
 				return
 
-			case <-time.After(10 * time.Second):
+			case <-time.After(utils.Jitter(10 * time.Second)):
 			}
 
 			// Journal may not be ready yet so it is not
@@ -273,7 +273,7 @@ func (self *MasterFrontendManager) UpdateStats(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(10 * time.Second):
+		case <-time.After(utils.Jitter(10 * time.Second)):
 		}
 
 		all_stats, err := self.prepareOrgStats()
@@ -361,6 +361,12 @@ type MinionFrontendManager struct {
 	name       string
 }
 
+func NewMinionFrontendManager(
+	config_obj *config_proto.Config,
+	name string) *MinionFrontendManager {
+	return &MinionFrontendManager{config_obj: config_obj, name: name}
+}
+
 func (self MinionFrontendManager) GetMinionCount() int {
 	return 0
 }
@@ -372,7 +378,9 @@ func (self MinionFrontendManager) IsMaster() bool {
 // The minion frontend replicates to the master node.
 func (self MinionFrontendManager) GetMasterAPIClient(ctx context.Context) (
 	api_proto.APIClient, func() error, error) {
-	client, closer, err := grpc_client.Factory.GetAPIClient(ctx, self.config_obj)
+	// Connect as the SuperUser
+	client, closer, err := grpc_client.Factory.GetAPIClient(
+		ctx, grpc_client.SuperUser, self.config_obj)
 	if err != nil {
 		return nil, nil, err
 	}

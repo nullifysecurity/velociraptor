@@ -96,6 +96,7 @@ class VeloClientSearch extends Component {
                         placeholder: T("SEARCH_CLIENTS"),
                         spellCheck: "false",
                         value: this.state.query,
+                        id: "SEARCH_CLIENTS",
                         onChange: (e, {newValue, method}) => {
                             this.setState({query: newValue});
                             e.preventDefault();
@@ -127,6 +128,18 @@ class VeloClientSearch extends Component {
                         variant="default" type="button">
                         <FontAwesomeIcon icon="bookmark"/>
                         <span className="button-label">{T("Recent Hosts")}</span>
+                      </Dropdown.Item>
+                      <Dropdown.Item
+                        onClick={(e) => this.setQuery("label:*")}
+                        variant="default" type="button">
+                        <FontAwesomeIcon icon="tags"/>
+                        <span className="button-label">{T("Labeled Hosts")}</span>
+                      </Dropdown.Item>
+                      <Dropdown.Item
+                        onClick={(e) => this.setQuery("label:none")}
+                        variant="default" type="button">
+                        <FontAwesomeIcon icon="tags"/>
+                        <span className="button-label">{T("Unlabeled Hosts")}</span>
                       </Dropdown.Item>
                     </Dropdown.Menu>
                   </Dropdown>

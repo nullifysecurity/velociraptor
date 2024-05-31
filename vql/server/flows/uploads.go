@@ -12,6 +12,7 @@ import (
 	"www.velocidex.com/golang/velociraptor/paths"
 	"www.velocidex.com/golang/velociraptor/result_sets"
 	"www.velocidex.com/golang/velociraptor/services"
+	"www.velocidex.com/golang/velociraptor/uploads"
 	"www.velocidex.com/golang/velociraptor/utils"
 	"www.velocidex.com/golang/velociraptor/vql"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
@@ -20,9 +21,10 @@ import (
 )
 
 type UploadsPluginsArgs struct {
-	ClientId string `vfilter:"optional,field=client_id,doc=The client id to extract"`
-	FlowId   string `vfilter:"optional,field=flow_id,doc=A flow ID (client or server artifacts)"`
-	HuntId   string `vfilter:"optional,field=hunt_id,doc=A hunt ID"`
+	ClientId   string `vfilter:"optional,field=client_id,doc=The client id to extract"`
+	FlowId     string `vfilter:"optional,field=flow_id,doc=A flow ID (client or server artifacts)"`
+	HuntId     string `vfilter:"optional,field=hunt_id,doc=A hunt ID"`
+	NotebookId string `vfilter:"optional,field=notebook_id,doc=A notebook ID"`
 }
 
 type UploadsPlugins struct{}
@@ -46,7 +48,7 @@ func (self UploadsPlugins) Call(
 
 		config_obj, ok := vql_subsystem.GetServerConfig(scope)
 		if !ok {
-			scope.Log("Command can only run on the server")
+			scope.Log("uploads: Command can only run on the server")
 			return
 		}
 
@@ -57,6 +59,55 @@ func (self UploadsPlugins) Call(
 		if err != nil {
 			scope.Log("uploads: %v", err)
 			return
+		}
+
+		// Extract notebook uploads
+		if arg.NotebookId != "" {
+			notebook_manager, err := services.GetNotebookManager(config_obj)
+			if err != nil {
+				scope.Log("uploads: %v", err)
+				return
+			}
+
+			notebook_metadata, err := notebook_manager.GetNotebook(
+				ctx, arg.NotebookId, services.INCLUDE_UPLOADS)
+			if err != nil {
+				scope.Log("uploads: %v", err)
+				return
+			}
+
+			if notebook_metadata.AvailableUploads == nil {
+				return
+			}
+
+			for _, upload := range notebook_metadata.AvailableUploads.Files {
+				var components []string
+				if upload.Stats != nil {
+					components = upload.Stats.Components
+				}
+
+				vfs_path := path_specs.NewUnsafeFilestorePath(components...).
+					SetType(api.PATH_TYPE_FILESTORE_ANY)
+
+				select {
+				case <-ctx.Done():
+					return
+
+				case output_chan <- ordereddict.NewDict().
+					Set("notebook_id", notebook_metadata.NotebookId).
+					Set("name", upload.Name).
+					Set("started", upload.Date).
+					Set("file_size", upload.Size).
+					Set("uploaded_size", upload.Size).
+					Set("vfs_path", vfs_path.String()).
+					Set("Upload", uploads.UploadResponse{
+						Path:       vfs_path.String(),
+						Size:       upload.Size,
+						StoredSize: upload.Size,
+						Components: components,
+					}):
+				}
+			}
 		}
 
 		if arg.HuntId == "" {
@@ -72,8 +123,15 @@ func (self UploadsPlugins) Call(
 			return
 		}
 
-		for flow_details := range hunt_dispatcher.GetFlows(
-			ctx, config_obj, scope, arg.HuntId, 0) {
+		options := result_sets.ResultSetOptions{}
+		flow_chan, _, err := hunt_dispatcher.GetFlows(
+			ctx, config_obj, options, scope, arg.HuntId, 0)
+		if err != nil {
+			scope.Log("uploads: %v", err)
+			return
+		}
+
+		for flow_details := range flow_chan {
 			client_id := flow_details.Context.ClientId
 			flow_id := flow_details.Context.SessionId
 
@@ -130,11 +188,15 @@ func readFlowUploads(
 			continue
 		}
 
+		size, _ := row.GetInt64("file_size")
+		stored_size, _ := row.GetInt64("uploaded_size")
+		accessor, _ := row.GetString("_accessor")
+
 		var components []string
 		var pathspec api.FSPathSpec
 
-		// The we have the components we get the file store path
-		// from there.
+		// If we have the components we get the file store path from
+		// there.
 		components_any, ok := row.Get("_Components")
 		if ok {
 			components = utils.ConvertToStringSlice(components_any)
@@ -153,6 +215,15 @@ func readFlowUploads(
 		}
 
 		row.Update("vfs_path", pathspec)
+
+		// Build an upload record for the GUI
+		row.Set("Upload", uploads.UploadResponse{
+			Path:       vfs_path,
+			Size:       uint64(size),
+			StoredSize: uint64(stored_size),
+			Components: components,
+			Accessor:   accessor,
+		})
 
 		select {
 		case <-ctx.Done():
@@ -186,6 +257,11 @@ func ParseUploadArgsFromScope(arg *UploadsPluginsArgs, scope vfilter.Scope) {
 	hunt_id, pres := scope.Resolve("HuntId")
 	if pres {
 		arg.HuntId, _ = hunt_id.(string)
+	}
+
+	notebook_id, pres := scope.Resolve("NotebookId")
+	if pres {
+		arg.NotebookId, _ = notebook_id.(string)
 	}
 }
 

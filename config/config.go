@@ -1,25 +1,24 @@
 /*
-   Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+Velociraptor - Dig Deeper
+Copyright (C) 2019-2024 Rapid7 Inc.
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published
-   by the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package config
 
 import (
 	"io/ioutil"
-	"os"
 	"runtime"
 
 	"github.com/Velocidex/yaml/v2"
@@ -36,24 +35,6 @@ var (
 	commit_hash string
 	ci_run_url  string
 )
-
-// Return the location of the writeback file.
-func WritebackLocation(self *config_proto.ClientConfig) (string, error) {
-	if self == nil {
-		return "", errors.New("Client not configured")
-	}
-
-	switch runtime.GOOS {
-	case "darwin":
-		return os.ExpandEnv(self.WritebackDarwin), nil
-	case "linux":
-		return os.ExpandEnv(self.WritebackLinux), nil
-	case "windows":
-		return os.ExpandEnv(self.WritebackWindows), nil
-	default:
-		return os.ExpandEnv(self.WritebackLinux), nil
-	}
-}
 
 func GetVersion() *config_proto.Version {
 	return &config_proto.Version{
@@ -74,8 +55,9 @@ func GetDefaultConfig() *config_proto.Config {
 			WritebackLinux:  "/etc/velociraptor.writeback.yaml",
 			WritebackWindows: "$ProgramFiles\\Velociraptor\\" +
 				"velociraptor.writeback.yaml",
-			TempdirWindows: "$ProgramFiles\\Velociraptor\\Tools",
-			MaxPoll:        60,
+			Level2WritebackSuffix: ".bak",
+			TempdirWindows:        "$ProgramFiles\\Velociraptor\\Tools",
+			MaxPoll:               60,
 
 			// By default restart the client if we are unable to
 			// contant the server within this long. (NOTE - even a
@@ -113,17 +95,15 @@ func GetDefaultConfig() *config_proto.Config {
 			// If set to true this will stop
 			// arbitrary code execution on the
 			// client.
-			PreventExecve:    false,
-			MaxUploadSize:    constants.MAX_MEMORY,
-			PinnedServerName: "VelociraptorServer",
+			PreventExecve: false,
+			MaxUploadSize: constants.MAX_MEMORY,
 		},
 		API: &config_proto.APIConfig{
 			// Bind port for gRPC endpoint - this should not
 			// normally be exposed.
-			BindAddress:  "127.0.0.1",
-			BindPort:     8001,
-			BindScheme:   "tcp",
-			PinnedGwName: "GRPC_GW",
+			BindAddress: "127.0.0.1",
+			BindPort:    8001,
+			BindScheme:  "tcp",
 		},
 		GUI: &config_proto.GUIConfig{
 			// Bind port for GUI. If you expose this on a

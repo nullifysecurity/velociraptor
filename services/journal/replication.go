@@ -75,8 +75,7 @@ type ReplicationService struct {
 	ctx        context.Context
 
 	// Locally connected watchers.
-	qm    api.QueueManager
-	Clock utils.Clock
+	qm api.QueueManager
 
 	sender chan *api_proto.PushEventRequest
 
@@ -115,10 +114,6 @@ func (self *ReplicationService) isEventRegistered(artifact string) bool {
 	return pres && ok
 }
 
-func (self *ReplicationService) SetClock(clock utils.Clock) {
-	self.qm.SetClock(clock)
-}
-
 func (self *ReplicationService) pumpEventFromBufferFile() error {
 	logger := logging.GetLogger(self.config_obj, &logging.FrontendComponent)
 	frontend_manager, err := services.GetFrontendManager(self.config_obj)
@@ -135,7 +130,7 @@ func (self *ReplicationService) pumpEventFromBufferFile() error {
 			case <-self.ctx.Done():
 				return nil
 
-			case <-time.After(self.RetryDuration()):
+			case <-time.After(utils.Jitter(self.RetryDuration())):
 				continue
 			}
 		}
@@ -165,7 +160,7 @@ func (self *ReplicationService) pumpEventFromBufferFile() error {
 				closer()
 				return nil
 
-			case <-time.After(self.RetryDuration()):
+			case <-time.After(utils.Jitter(self.RetryDuration())):
 			}
 			closer()
 		}
@@ -189,7 +184,7 @@ func (self *ReplicationService) startAsyncLoop(
 			case <-ctx.Done():
 				return
 
-			case <-time.After(200 * time.Millisecond):
+			case <-time.After(utils.Jitter(200 * time.Millisecond)):
 				// Work on the batch without a lock
 				self.mu.Lock()
 				todo := self.batch
@@ -465,7 +460,6 @@ func (self *ReplicationService) pushRowsToLocalQueueManager(
 	if err != nil {
 		return err
 	}
-	path_manager.Clock = self.Clock
 
 	// Just a regular artifact, append to the existing result set.
 	if !path_manager.IsEvent() {
@@ -493,7 +487,6 @@ func (self *ReplicationService) pushJsonlToLocalQueueManager(
 	if err != nil {
 		return err
 	}
-	path_manager.Clock = self.Clock
 
 	// Just a regular artifact, append to the existing result set.
 	if !path_manager.IsEvent() {
@@ -612,17 +605,26 @@ func (self *ReplicationService) Watch(
 
 	go func() {
 		for {
+			in_chan := self.watchOnce(subctx, queue, watcher_name)
+
+		retry:
+			for {
+				select {
+				case event, ok := <-in_chan:
+					if !ok {
+						break retry
+					}
+					output_chan <- event
+				}
+			}
+
 			// Keep retrying to reconnect in case the
 			// connection dropped.
-			for event := range self.watchOnce(
-				subctx, queue, watcher_name) {
-				output_chan <- event
-			}
 
 			select {
 			case <-self.ctx.Done():
 				return
-			case <-time.After(self.RetryDuration()):
+			case <-time.After(utils.Jitter(self.RetryDuration())):
 			}
 
 			logger := logging.GetLogger(self.config_obj,
@@ -726,7 +728,6 @@ func NewReplicationService(
 		locks:               make(map[string]*sync.Mutex),
 		masterRegistrations: make(map[string]bool),
 		batch:               make(map[string]*jsonBatch),
-		Clock:               utils.RealClock{},
 	}
 
 	qm, err := file_store.GetQueueManager(config_obj)

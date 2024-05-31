@@ -13,6 +13,7 @@ import (
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/services/acl_manager"
 	"www.velocidex.com/golang/velociraptor/services/audit_manager"
+	"www.velocidex.com/golang/velociraptor/services/backup"
 	"www.velocidex.com/golang/velociraptor/services/broadcast"
 	"www.velocidex.com/golang/velociraptor/services/client_info"
 	"www.velocidex.com/golang/velociraptor/services/client_monitoring"
@@ -30,6 +31,8 @@ import (
 	"www.velocidex.com/golang/velociraptor/services/notifications"
 	"www.velocidex.com/golang/velociraptor/services/repository"
 	"www.velocidex.com/golang/velociraptor/services/sanity"
+	"www.velocidex.com/golang/velociraptor/services/scheduler"
+	"www.velocidex.com/golang/velociraptor/services/secrets"
 	"www.velocidex.com/golang/velociraptor/services/server_artifacts"
 	"www.velocidex.com/golang/velociraptor/services/server_monitoring"
 	"www.velocidex.com/golang/velociraptor/services/users"
@@ -52,11 +55,14 @@ type ServiceContainer struct {
 	hunt_dispatcher         services.IHuntDispatcher
 	launcher                services.Launcher
 	notebook_manager        services.NotebookManager
+	scheduler               services.Scheduler
 	client_event_manager    services.ClientEventTable
 	server_event_manager    services.ServerEventManager
 	server_artifact_manager services.ServerArtifactRunner
 	notifier                services.Notifier
 	acl_manager             services.ACLManager
+	secrets                 services.SecretsService
+	backups                 services.BackupService
 }
 
 func (self *ServiceContainer) MockFrontendManager(svc services.FrontendManager) {
@@ -131,6 +137,17 @@ func (self *ServiceContainer) NotebookManager() (services.NotebookManager, error
 	return self.notebook_manager, nil
 }
 
+func (self *ServiceContainer) SecretsService() (services.SecretsService, error) {
+	self.mu.Lock()
+	defer self.mu.Unlock()
+
+	if self.secrets == nil {
+		return nil, errors.New("Secrets service not initialized")
+	}
+
+	return self.secrets, nil
+}
+
 func (self *ServiceContainer) AuditManager() (services.AuditManager, error) {
 	return &audit_manager.AuditManager{}, nil
 }
@@ -190,6 +207,17 @@ func (self *ServiceContainer) VFSService() (services.VFSService, error) {
 	return self.vfs_service, nil
 }
 
+func (self *ServiceContainer) Scheduler() (services.Scheduler, error) {
+	self.mu.Lock()
+	defer self.mu.Unlock()
+
+	if self.scheduler == nil {
+		return nil, errors.New("Scheduler service not initialized")
+	}
+
+	return self.scheduler, nil
+}
+
 func (self *ServiceContainer) Labeler() (services.Labeler, error) {
 	self.mu.Lock()
 	defer self.mu.Unlock()
@@ -241,6 +269,16 @@ func (self *ServiceContainer) BroadcastService() (services.BroadcastService, err
 	return self.broadcast, nil
 }
 
+func (self *ServiceContainer) BackupService() (services.BackupService, error) {
+	self.mu.Lock()
+	defer self.mu.Unlock()
+
+	if self.backups == nil {
+		return nil, errors.New("Backup Service not ready")
+	}
+	return self.backups, nil
+}
+
 func (self *ServiceContainer) ACLManager() (services.ACLManager, error) {
 	self.mu.Lock()
 	defer self.mu.Unlock()
@@ -258,6 +296,8 @@ func (self *OrgManager) startOrg(org_record *api_proto.OrgRecord) (err error) {
 	org_config := self.makeNewConfigObj(org_record)
 	logger := logging.GetLogger(self.config_obj, &logging.FrontendComponent)
 	logger.Info("Starting services for %v", services.GetOrgName(org_config))
+
+	orgStartCounter.Inc()
 
 	org_ctx := &OrgContext{
 		record:     org_record,
@@ -323,10 +363,17 @@ func (self *OrgManager) startRootOrgServices(
 		return err
 	}
 
-	err = datastore.StartRemoteDatastore(
+	err = datastore.StartDatastore(
 		ctx, wg, org_config)
 	if err != nil {
 		return err
+	}
+
+	if spec.SchedulerService {
+		err := scheduler.StartSchedulerService(ctx, wg, org_config)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -345,6 +392,12 @@ func (self *OrgManager) startOrgFromContext(org_ctx *OrgContext) (err error) {
 		spec = org_config.Services
 	}
 
+	if spec.BackupService {
+		service_container.mu.Lock()
+		service_container.backups = backup.NewBackupService(ctx, wg, org_config)
+		service_container.mu.Unlock()
+	}
+
 	if spec.FrontendServer {
 		f, err := frontend.NewFrontendService(ctx, wg, org_config)
 		if err != nil {
@@ -355,28 +408,6 @@ func (self *OrgManager) startOrgFromContext(org_ctx *OrgContext) (err error) {
 		service_container.mu.Unlock()
 	}
 
-	// Now start service on the root org
-	if utils.IsRootOrg(org_id) {
-		err := self.startRootOrgServices(ctx, wg, spec, org_config, service_container)
-		if err != nil {
-			return err
-		}
-	}
-
-	if spec.UserManager {
-		m, err := acl_manager.NewACLManager(ctx, wg, org_config)
-		if err != nil {
-			return err
-		}
-
-		service_container.mu.Lock()
-		service_container.acl_manager = m
-		service_container.mu.Unlock()
-	}
-
-	// Now start the services for this org. Services depend on other
-	// services so they need to be accessible as soon as they are
-	// ready.
 	if spec.JournalService {
 		j, err := journal.NewJournalService(ctx, wg, org_config)
 		if err != nil {
@@ -388,6 +419,38 @@ func (self *OrgManager) startOrgFromContext(org_ctx *OrgContext) (err error) {
 		service_container.mu.Unlock()
 	}
 
+	// Now start service on the root org
+	if utils.IsRootOrg(org_id) {
+		err := self.startRootOrgServices(ctx, wg, spec, org_config, service_container)
+		if err != nil {
+			return err
+		}
+	}
+
+	// ACL manager exist for each org
+	if spec.UserManager {
+		m, err := acl_manager.NewACLManager(ctx, wg, org_config)
+		if err != nil {
+			return err
+		}
+
+		service_container.mu.Lock()
+		service_container.acl_manager = m
+		service_container.mu.Unlock()
+
+		s, err := secrets.NewSecretsService(ctx, wg, org_config)
+		if err != nil {
+			return err
+		}
+
+		service_container.mu.Lock()
+		service_container.secrets = s
+		service_container.mu.Unlock()
+	}
+
+	// Now start the services for this org. Services depend on other
+	// services so they need to be accessible as soon as they are
+	// ready.
 	if spec.NotificationService {
 		n, err := notifications.NewNotificationService(ctx, wg, org_config)
 		if err != nil {
@@ -424,6 +487,20 @@ func (self *OrgManager) startOrgFromContext(org_ctx *OrgContext) (err error) {
 
 		service_container.mu.Lock()
 		service_container.launcher = launch
+		service_container.mu.Unlock()
+	}
+
+	// Inventory service needs to start before we import built in
+	// artifacts so they can add their tool dependencies.
+	if spec.InventoryService {
+		i, err := inventory.NewInventoryService(
+			ctx, wg, org_config)
+		if err != nil {
+			return err
+		}
+
+		service_container.mu.Lock()
+		service_container.inventory = i
 		service_container.mu.Unlock()
 	}
 
@@ -483,18 +560,6 @@ func (self *OrgManager) startOrgFromContext(org_ctx *OrgContext) (err error) {
 		service_container.mu.Unlock()
 	}
 
-	if spec.InventoryService {
-		i, err := inventory.NewInventoryService(
-			ctx, wg, org_config)
-		if err != nil {
-			return err
-		}
-
-		service_container.mu.Lock()
-		service_container.inventory = i
-		service_container.mu.Unlock()
-	}
-
 	if spec.HuntDispatcher {
 		hd, err := hunt_dispatcher.NewHuntDispatcher(
 			ctx, wg, org_config)
@@ -525,7 +590,10 @@ func (self *OrgManager) startOrgFromContext(org_ctx *OrgContext) (err error) {
 	}
 
 	if spec.ClientInfo {
-		c := client_info.NewClientInfoManager(org_config)
+		c, err := client_info.NewClientInfoManager(ctx, org_config)
+		if err != nil {
+			return err
+		}
 		err = c.Start(ctx, org_config, wg)
 		if err != nil {
 			return err
@@ -649,37 +717,14 @@ func maybeFlushFilesOnClose(
 		return nil
 	}
 
-	// Flush the filestore if needed. Not all filestores need
-	// flushing.
-	file_store_factory := file_store.GetFileStore(org_config)
-	flusher, ok := file_store_factory.(Flusher)
-	if ok {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-ctx.Done()
-			if flusher != nil {
-				flusher.Flush()
-			}
-		}()
-	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-ctx.Done()
 
-	db, err := datastore.GetDB(org_config)
-	if err != nil {
-		return err
-	}
-
-	flusher, ok = db.(Flusher)
-	if ok {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-ctx.Done()
-			if flusher != nil {
-				flusher.Flush()
-			}
-		}()
-	}
+		file_store.FlushFilestore(org_config)
+		datastore.FlushDatastore(org_config)
+	}()
 
 	return nil
 }

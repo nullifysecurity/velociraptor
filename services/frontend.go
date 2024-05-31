@@ -14,7 +14,7 @@ import (
 // frontends to spread the load between them.
 
 var (
-	FrontendIsMaster = os.ErrNotExist
+	FrontendIsMaster = fmt.Errorf("FrontendIsMaster: %w", os.ErrNotExist)
 )
 
 func GetFrontendManager(config_obj *config_proto.Config) (
@@ -44,6 +44,10 @@ func IsMaster(config_obj *config_proto.Config) bool {
 		return !config_obj.Frontend.IsMinion
 	}
 	return true
+}
+
+func IsMinion(config_obj *config_proto.Config) bool {
+	return !IsMaster(config_obj)
 }
 
 func GetNodeName(frontend_config *config_proto.FrontendConfig) string {

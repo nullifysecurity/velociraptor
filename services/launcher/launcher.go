@@ -117,12 +117,8 @@ package launcher
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base32"
-	"encoding/binary"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/go-errors/errors"
 	"google.golang.org/protobuf/proto"
@@ -199,6 +195,15 @@ func (self *Launcher) CompileCollectorArgs(
 	for _, spec := range getCollectorSpecs(collector_request) {
 		var artifact *artifacts_proto.Artifact = nil
 
+		// Batching control
+		var max_batch_wait, max_batch_rows, max_batch_row_buffer uint64
+
+		if config_obj != nil && config_obj.Defaults != nil {
+			max_batch_rows = config_obj.Defaults.MaxRows
+			max_batch_row_buffer = config_obj.Defaults.MaxRowBufferSize
+			max_batch_wait = config_obj.Defaults.MaxBatchWait
+		}
+
 		if collector_request.AllowCustomOverrides {
 			artifact, _ = repository.Get(ctx, config_obj, "Custom."+spec.Artifact)
 		}
@@ -218,7 +223,9 @@ func (self *Launcher) CompileCollectorArgs(
 			return nil, errors.New("Unknown artifact " + spec.Artifact)
 		}
 
-		err := CheckAccess(config_obj, artifact, acl_manager)
+		// Make sure the user can collect this artifact.
+		err := CheckAccess(
+			config_obj, artifact, collector_request, acl_manager)
 		if err != nil {
 			return nil, err
 		}
@@ -233,6 +240,32 @@ func (self *Launcher) CompileCollectorArgs(
 			if artifact.Resources.MaxUploadBytes > max_upload_bytes {
 				max_upload_bytes = artifact.Resources.MaxUploadBytes
 			}
+
+			if artifact.Resources.MaxBatchWait > max_batch_wait {
+				max_batch_wait = artifact.Resources.MaxBatchWait
+			}
+
+			if artifact.Resources.MaxBatchRows > max_batch_rows {
+				max_batch_rows = artifact.Resources.MaxBatchRows
+			}
+
+			if artifact.Resources.MaxBatchRowsBuffer > max_batch_row_buffer {
+				max_batch_row_buffer = artifact.Resources.MaxBatchRowsBuffer
+			}
+		}
+
+		// If the spec specifies a value it overrides the artifact
+		// definition
+		if spec.MaxBatchRows > 0 {
+			max_batch_rows = spec.MaxBatchRows
+		}
+
+		if spec.MaxBatchRowsBuffer > 0 {
+			max_batch_row_buffer = spec.MaxBatchRowsBuffer
+		}
+
+		if spec.MaxBatchWait > 0 {
+			max_batch_wait = spec.MaxBatchWait
 		}
 
 		for _, expanded_artifact := range expandArtifacts(artifact) {
@@ -242,6 +275,10 @@ func (self *Launcher) CompileCollectorArgs(
 			if err != nil {
 				return nil, err
 			}
+
+			vql_collector_args.MaxRow = max_batch_rows
+			vql_collector_args.MaxWait = max_batch_wait
+			vql_collector_args.MaxRowBufferSize = max_batch_row_buffer
 
 			// If the request specifies resource controls
 			// they override the defaults.
@@ -263,11 +300,6 @@ func (self *Launcher) CompileCollectorArgs(
 
 			if collector_request.Timeout > 0 {
 				vql_collector_args.Timeout = collector_request.Timeout
-			}
-
-			if config_obj != nil && config_obj.Defaults != nil {
-				vql_collector_args.MaxRow = config_obj.Defaults.MaxRows
-				vql_collector_args.MaxRowBufferSize = config_obj.Defaults.MaxRowBufferSize
 			}
 
 			if vql_collector_args.MaxRow == 0 {
@@ -508,6 +540,8 @@ func AddToolDependency(
 	return nil
 }
 
+// Scheduling artifact collections only happens on the master node at
+// the moment.
 func (self *Launcher) ScheduleArtifactCollection(
 	ctx context.Context,
 	config_obj *config_proto.Config,
@@ -515,6 +549,11 @@ func (self *Launcher) ScheduleArtifactCollection(
 	repository services.Repository,
 	collector_request *flows_proto.ArtifactCollectorArgs,
 	completion func()) (string, error) {
+
+	if !services.IsMaster(config_obj) {
+		return "", errors.New(
+			"ScheduleArtifactCollection can only be called on the master node")
+	}
 
 	args := collector_request.CompiledCollectorArgs
 	if args == nil {
@@ -569,7 +608,7 @@ func (self *Launcher) WriteArtifactCollectionRecord(
 
 	session_id := collector_request.FlowId
 	if session_id == "" {
-		session_id = NewFlowId(client_id)
+		session_id = utils.NewFlowId(client_id)
 	}
 
 	// How long to batch log messages for on the client.
@@ -645,9 +684,15 @@ func (self *Launcher) WriteArtifactCollectionRecord(
 
 		// Write the collection object so the GUI can start tracking
 		// it.
+		redacted := redactCollectContext(collection_context)
 		err = self.Storage().WriteFlow(
-			ctx, config_obj, redactCollectContext(collection_context),
-			utils.BackgroundWriter)
+			ctx, config_obj, redacted, utils.BackgroundWriter)
+		if err != nil {
+			return "", err
+		}
+
+		// Write the flow on the index.
+		err = self.Storage().WriteFlowIndex(ctx, config_obj, redacted)
 		if err != nil {
 			return "", err
 		}
@@ -668,7 +713,9 @@ func (self *Launcher) WriteArtifactCollectionRecord(
 		return "", err
 	}
 
-	return collection_context.SessionId, nil
+	// Write the flow on the index.
+	err = self.Storage().WriteFlowIndex(ctx, config_obj, collection_context)
+	return collection_context.SessionId, err
 }
 
 // Adds any parameters set in the ArtifactCollectorArgs into the
@@ -710,27 +757,7 @@ func addOrReplaceParameter(
 }
 
 func (self *Launcher) SetFlowIdForTests(id string) {
-	NextFlowIdForTests = id
-}
-
-var (
-	NextFlowIdForTests string
-)
-
-func NewFlowId(client_id string) string {
-	if NextFlowIdForTests != "" {
-		result := NextFlowIdForTests
-		NextFlowIdForTests = ""
-		return result
-	}
-
-	buf := make([]byte, 8)
-	_, _ = rand.Read(buf)
-
-	binary.BigEndian.PutUint32(buf, uint32(time.Now().Unix()))
-	result := base32.HexEncoding.EncodeToString(buf)[:13]
-
-	return constants.FLOW_PREFIX + result
+	utils.SetIdGenerator(utils.ConstantIdGenerator(id))
 }
 
 func NewLauncherService(

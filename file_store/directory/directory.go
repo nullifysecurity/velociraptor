@@ -55,6 +55,16 @@ func (self *DirectoryFileWriter) Size() (int64, error) {
 	return self.Fd.Seek(0, os.SEEK_END)
 }
 
+func (self *DirectoryFileWriter) Update(data []byte, offset int64) error {
+	_, err := self.Fd.Seek(offset, os.SEEK_SET)
+	if err != nil {
+		return err
+	}
+
+	_, err = self.Fd.Write(data)
+	return err
+}
+
 func (self *DirectoryFileWriter) Write(data []byte) (int, error) {
 
 	defer api.InstrumentWithDelay("write", "DirectoryFileWriter", nil)()
@@ -164,14 +174,13 @@ func (self *DirectoryFileStore) StatFile(
 		return nil, err
 	}
 
-	return &file_store_file_info.FileStoreFileInfo{
-		FileInfo: file,
-	}, nil
+	return file_store_file_info.NewFileStoreFileInfo(
+		self.config_obj, filename, file), nil
 }
 
 func (self *DirectoryFileStore) WriteFile(
 	filename api.FSPathSpec) (api.FileWriter, error) {
-	return self.WriteFileWithCompletion(filename, nil)
+	return self.WriteFileWithCompletion(filename, utils.SyncCompleter)
 }
 
 func (self *DirectoryFileStore) WriteFileWithCompletion(
@@ -219,7 +228,7 @@ func (self *DirectoryFileStore) Delete(filename api.FSPathSpec) error {
 		err = os.Remove(dir_name)
 		if err == nil {
 			logger := logging.GetLogger(self.config_obj, &logging.FrontendComponent)
-			logger.Debug("Prunning empty directory %v", dir_name)
+			logger.Debug("Pruning empty directory %v", dir_name)
 		}
 
 		// Check if this is the last file in the directory.

@@ -1,6 +1,6 @@
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+   Copyright (C) 2019-2024 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -19,7 +19,6 @@ package launcher
 
 import (
 	"context"
-	"sort"
 
 	"github.com/go-errors/errors"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
@@ -28,6 +27,7 @@ import (
 	flows_proto "www.velocidex.com/golang/velociraptor/flows/proto"
 	"www.velocidex.com/golang/velociraptor/paths"
 	"www.velocidex.com/golang/velociraptor/reporting"
+	"www.velocidex.com/golang/velociraptor/result_sets"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/utils"
 )
@@ -36,56 +36,39 @@ import (
 func (self *Launcher) GetFlows(
 	ctx context.Context,
 	config_obj *config_proto.Config,
-	client_id string, include_archived bool,
-	flow_filter func(flow *flows_proto.ArtifactCollectorContext) bool,
-	offset uint64, length uint64) (*api_proto.ApiFlowResponse, error) {
+	client_id string,
+	options result_sets.ResultSetOptions,
+	offset, length int64) (*api_proto.ApiFlowResponse, error) {
 
 	result := &api_proto.ApiFlowResponse{}
-	flow_ids, err := self.Storage().ListFlows(ctx, config_obj, client_id)
+	flow_summaries, total_rows, err := self.Storage().ListFlows(
+		ctx, config_obj, client_id, options, offset, length)
 	if err != nil {
 		return nil, err
 	}
 
 	// No flows were returned.
-	if len(flow_ids) == 0 {
+	if len(flow_summaries) == 0 {
 		return result, nil
 	}
 
-	// Page the flow urns
-	end := offset + length
-	if end > uint64(len(flow_ids)) {
-		end = uint64(len(flow_ids))
-	}
-	flow_ids = flow_ids[offset:end]
-
-	flow_reader := NewFlowReader(
-		ctx, config_obj, self.Storage(), client_id)
-	go func() {
-		defer flow_reader.Close()
-
-		for _, flow_id := range flow_ids {
-			flow_reader.In <- flow_id
-		}
-	}()
+	result.Total = uint64(total_rows)
 
 	// Collect the items that match from this backend read into an
 	// array
 	items := []*flows_proto.ArtifactCollectorContext{}
 
-	for collection_context := range flow_reader.Out {
-		if flow_filter != nil && !flow_filter(collection_context) {
-			continue
+	for _, flow_summary := range flow_summaries {
+		collection_context, err := self.Storage().
+			LoadCollectionContext(ctx, config_obj,
+				client_id, flow_summary.FlowId)
+		if err == nil {
+			items = append(items, collection_context)
 		}
-		items = append(items, collection_context)
 	}
 
-	// Flow IDs represent timestamp so they are sortable. The UI
-	// relies on more recent flows being at the top.
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].SessionId >= items[j].SessionId
-	})
-
 	result.Items = items
+
 	return result, nil
 }
 

@@ -1,6 +1,6 @@
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+   Copyright (C) 2019-2024 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -37,8 +37,9 @@ import (
 func install_static_assets(config_obj *config_proto.Config, mux *http.ServeMux) {
 	base := utils.GetBasePath(config_obj)
 	dir := utils.Join(base, "/app/")
-	mux.Handle(dir, http.StripPrefix(
-		dir, gzipped.FileServer(NewCachedFilesystem(gui_assets.HTTP))))
+	mux.Handle(dir, ipFilter(config_obj, http.StripPrefix(
+		dir, gzipped.FileServer(NewCachedFilesystem(gui_assets.HTTP)))))
+
 	mux.Handle("/favicon.png",
 		http.RedirectHandler(utils.Join(base, "/favicon.ico"),
 			http.StatusMovedPermanently))
@@ -46,7 +47,7 @@ func install_static_assets(config_obj *config_proto.Config, mux *http.ServeMux) 
 
 func GetTemplateHandler(
 	config_obj *config_proto.Config, template_name string) (http.Handler, error) {
-	gui_assets.Init()
+	gui_assets.InitOnce()
 
 	data, err := gui_assets.ReadFile(template_name)
 	if err != nil {

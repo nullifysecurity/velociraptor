@@ -1,6 +1,6 @@
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+   Copyright (C) 2019-2024 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -175,9 +175,13 @@ func (self *HuntManager) processMutation(
 		return err
 	}
 
-	dispatcher.ModifyHuntObject(ctx, mutation.HuntId,
+	modification := dispatcher.ModifyHuntObject(
+		ctx, mutation.HuntId,
 		func(hunt_obj *api_proto.Hunt) services.HuntModificationAction {
 			modification := services.HuntUnmodified
+			if hunt_obj == nil {
+				return modification
+			}
 
 			if hunt_obj.Stats == nil {
 				hunt_obj.Stats = &api_proto.HuntStats{}
@@ -243,6 +247,12 @@ func (self *HuntManager) processMutation(
 				modification = services.HuntPropagateChanges
 			}
 
+			if mutation.Expires > 0 {
+				hunt_obj.Expires = mutation.Expires
+
+				modification = services.HuntPropagateChanges
+			}
+
 			// Hunt is restarted, notify all connected clients
 			if mutation.StartTime > 0 {
 				hunt_obj.StartTime = mutation.StartTime
@@ -252,6 +262,12 @@ func (self *HuntManager) processMutation(
 
 			return modification
 		})
+
+	// Force the dispatcher to write the index.
+	if modification == services.HuntPropagateChanges {
+		return dispatcher.Refresh(ctx, config_obj)
+	}
+
 	return nil
 }
 
@@ -289,7 +305,7 @@ func (self *HuntManager) maybeDirectlyAssignFlow(
 				Set("HuntId", mutation.HuntId).
 				Set("ClientId", assignment.ClientId).
 				Set("FlowId", assignment.FlowId).
-				Set("Timestamp", time.Now().Unix()),
+				Set("Timestamp", utils.GetTime().Now().Unix()),
 		})
 	if err != nil {
 		return err
@@ -321,7 +337,7 @@ func (self *HuntManager) ProcessInterrogation(
 		return errors.New("ClientId not found")
 	}
 
-	return self.participateInAllHunts(ctx, config_obj, client_id,
+	return self.participateInRunningHunts(ctx, config_obj, client_id,
 		// When a new client is interrogated, it can only really
 		// affect hunts with OS conditions.
 		func(hunt *api_proto.Hunt) bool {
@@ -430,7 +446,7 @@ func (self *HuntManager) ProcessLabelChange(
 		return nil
 	}
 
-	return self.participateInAllHunts(ctx, config_obj, client_id,
+	return self.participateInRunningHunts(ctx, config_obj, client_id,
 		// When a label changes it can only really affect hunts with
 		// include label conditions.
 		func(hunt *api_proto.Hunt) bool {
@@ -439,7 +455,7 @@ func (self *HuntManager) ProcessLabelChange(
 		})
 }
 
-func (self *HuntManager) participateInAllHunts(ctx context.Context,
+func (self *HuntManager) participateInRunningHunts(ctx context.Context,
 	config_obj *config_proto.Config, client_id string,
 	should_participate_cb func(hunt *api_proto.Hunt) bool) error {
 
@@ -454,18 +470,19 @@ func (self *HuntManager) participateInAllHunts(ctx context.Context,
 		return err
 	}
 
-	return dispatcher.ApplyFuncOnHunts(func(hunt *api_proto.Hunt) error {
-		if !should_participate_cb(hunt) {
+	return dispatcher.ApplyFuncOnHunts(ctx, services.OnlyRunningHunts,
+		func(hunt *api_proto.Hunt) error {
+			if !should_participate_cb(hunt) {
+				return nil
+			}
+
+			journal.PushRowsToArtifactAsync(ctx, config_obj,
+				ordereddict.NewDict().
+					Set("HuntId", hunt.HuntId).
+					Set("ClientId", client_id), "System.Hunt.Participation")
+
 			return nil
-		}
-
-		journal.PushRowsToArtifactAsync(ctx, config_obj,
-			ordereddict.NewDict().
-				Set("HuntId", hunt.HuntId).
-				Set("ClientId", client_id), "System.Hunt.Participation")
-
-		return nil
-	})
+		})
 }
 
 // When a client is found to be missing a hunt, the foreman sends the
@@ -526,7 +543,7 @@ func (self *HuntManager) ProcessParticipationWithError(
 		return err
 	}
 
-	hunt_obj, pres := dispatcher.GetHunt(participation_row.HuntId)
+	hunt_obj, pres := dispatcher.GetHunt(ctx, participation_row.HuntId)
 	if !pres {
 		return fmt.Errorf("Hunt %v not known", participation_row.HuntId)
 	}
@@ -558,7 +575,7 @@ func (self *HuntManager) ProcessParticipationWithError(
 	}
 
 	// Hunt limit exceeded or it expired - we stop it.
-	now := uint64(time.Now().UnixNano() / 1000)
+	now := uint64(utils.GetTime().Now().UnixNano() / 1000)
 	if (hunt_obj.ClientLimit > 0 &&
 		hunt_obj.Stats.TotalClientsScheduled >= hunt_obj.ClientLimit) ||
 		now > hunt_obj.Expires {
@@ -764,7 +781,7 @@ func scheduleHuntOnClient(
 		Set("HuntId", hunt_id).
 		Set("ClientId", client_id).
 		Set("FlowId", flow_id).
-		Set("Timestamp", time.Now().Unix())
+		Set("Timestamp", utils.GetTime().Now().Unix())
 
 	path_manager := paths.NewHuntPathManager(hunt_id)
 	err = journal.AppendToResultSet(config_obj,

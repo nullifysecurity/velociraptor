@@ -1,19 +1,19 @@
 /*
-   Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+Velociraptor - Dig Deeper
+Copyright (C) 2019-2024 Rapid7 Inc.
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published
-   by the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package hunts
 
@@ -34,6 +34,7 @@ import (
 	"www.velocidex.com/golang/velociraptor/vql/acl_managers"
 	"www.velocidex.com/golang/velociraptor/vql/functions"
 	"www.velocidex.com/golang/velociraptor/vql/tools/collector"
+	vql_utils "www.velocidex.com/golang/velociraptor/vql/utils"
 	"www.velocidex.com/golang/vfilter/arg_parser"
 
 	"www.velocidex.com/golang/vfilter"
@@ -78,7 +79,7 @@ func (self *ScheduleHuntFunction) Call(ctx context.Context,
 
 	var expires uint64
 	if !utils.IsNil(arg.Expires) {
-		expiry_time, err := functions.TimeFromAny(scope, arg.Expires.Reduce(ctx))
+		expiry_time, err := functions.TimeFromAny(ctx, scope, arg.Expires.Reduce(ctx))
 		if err != nil {
 			scope.Log("hunt: expiry time invalid: %v", err)
 			return vfilter.Null{}
@@ -95,7 +96,7 @@ func (self *ScheduleHuntFunction) Call(ctx context.Context,
 
 	config_obj, ok := vql_subsystem.GetServerConfig(scope)
 	if !ok {
-		scope.Log("Command can only run on the server")
+		scope.Log("hunt: Command can only run on the server")
 		return vfilter.Null{}
 	}
 
@@ -109,15 +110,10 @@ func (self *ScheduleHuntFunction) Call(ctx context.Context,
 
 	} else {
 		// Schedule on the current org
-		arg.OrgIds = append(arg.OrgIds, config_obj.OrgId)
+		arg.OrgIds = append(arg.OrgIds, utils.NormalizedOrgId(config_obj.OrgId))
 	}
 
-	manager, err := services.GetRepositoryManager(config_obj)
-	if err != nil {
-		scope.Log("hunt: %v", err)
-		return vfilter.Null{}
-	}
-	repository, err := manager.GetGlobalRepository(config_obj)
+	repository, err := vql_utils.GetRepository(scope)
 	if err != nil {
 		scope.Log("hunt: %v", err)
 		return vfilter.Null{}
@@ -167,11 +163,14 @@ func (self *ScheduleHuntFunction) Call(ctx context.Context,
 				},
 			},
 		}
+	}
 
-		if len(arg.ExcludeLabels) > 0 {
-			hunt_request.Condition.ExcludedLabels = &api_proto.HuntLabelCondition{
-				Label: arg.ExcludeLabels,
-			}
+	if len(arg.ExcludeLabels) > 0 {
+		if hunt_request.Condition == nil {
+			hunt_request.Condition = &api_proto.HuntCondition{}
+		}
+		hunt_request.Condition.ExcludedLabels = &api_proto.HuntLabelCondition{
+			Label: arg.ExcludeLabels,
 		}
 	}
 
@@ -217,6 +216,8 @@ func (self *ScheduleHuntFunction) Call(ctx context.Context,
 
 	var orgs_we_scheduled []string
 
+	var new_hunt *api_proto.Hunt
+
 	// Schedule the hunt on all the relevant orgs.
 	for _, org_id := range arg.OrgIds {
 		org_config_obj, err := org_manager.GetOrgConfig(org_id)
@@ -242,8 +243,15 @@ func (self *ScheduleHuntFunction) Call(ctx context.Context,
 			continue
 		}
 
-		hunt_id, err := hunt_dispatcher.CreateHunt(
-			ctx, org_config_obj, acl_manager, hunt_request)
+		// Only mark the org ids in the root org version of the hunt.
+		org_hunt_request := hunt_request
+		if utils.IsRootOrg(org_id) {
+			org_hunt_request = proto.Clone(hunt_request).(*api_proto.Hunt)
+			org_hunt_request.OrgIds = arg.OrgIds
+		}
+
+		new_hunt, err = hunt_dispatcher.CreateHunt(
+			ctx, org_config_obj, acl_manager, org_hunt_request)
 		if err != nil {
 			scope.Log("hunt: %v", err)
 			continue
@@ -251,19 +259,25 @@ func (self *ScheduleHuntFunction) Call(ctx context.Context,
 
 		orgs_we_scheduled = append(orgs_we_scheduled, org_id)
 
-		hunt_request.HuntId = hunt_id
+		// The first hunt will create an Id then subsequent hunts will
+		// reuse same ID.
+		hunt_request.HuntId = new_hunt.HuntId
+	}
+
+	if new_hunt == nil {
+		return vfilter.Null{}
 	}
 
 	services.LogAudit(ctx,
 		config_obj, principal, "CreateHunt",
 		ordereddict.NewDict().
-			Set("hunt_id", hunt_request.HuntId).
+			Set("hunt_id", new_hunt.HuntId).
 			Set("details", vfilter.RowToDict(ctx, scope, arg)).
 			Set("orgs", orgs_we_scheduled))
 
 	return ordereddict.NewDict().
-		Set("HuntId", hunt_request.HuntId).
-		Set("Request", hunt_request)
+		Set("HuntId", new_hunt.HuntId).
+		Set("Request", new_hunt)
 }
 
 func (self ScheduleHuntFunction) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) *vfilter.FunctionInfo {
@@ -303,7 +317,7 @@ func (self *AddToHuntFunction) Call(ctx context.Context,
 
 	config_obj, ok := vql_subsystem.GetServerConfig(scope)
 	if !ok {
-		scope.Log("Command can only run on the server")
+		scope.Log("hunt_add: Command can only run on the server")
 		return vfilter.Null{}
 	}
 
@@ -319,7 +333,7 @@ func (self *AddToHuntFunction) Call(ctx context.Context,
 			return vfilter.Null{}
 		}
 
-		hunt_obj, pres := hunt_dispatcher.GetHunt(arg.HuntId)
+		hunt_obj, pres := hunt_dispatcher.GetHunt(ctx, arg.HuntId)
 		if !pres || hunt_obj == nil ||
 			hunt_obj.StartRequest == nil ||
 			hunt_obj.StartRequest.CompiledCollectorArgs == nil {

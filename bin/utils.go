@@ -1,6 +1,6 @@
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+   Copyright (C) 2019-2024 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -156,5 +156,13 @@ func install_sig_handler() (context.Context, context.CancelFunc) {
 	}()
 
 	return ctx, cancel
+}
 
+func isConfigSpecified(argv []string) bool {
+	for _, a := range argv {
+		if a == "--config" {
+			return true
+		}
+	}
+	return false
 }

@@ -1,8 +1,9 @@
+//go:build windows
 // +build windows
 
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+   Copyright (C) 2019-2024 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -30,18 +31,19 @@ import (
 
 	"context"
 
+	kingpin "github.com/alecthomas/kingpin/v2"
 	errors "github.com/go-errors/errors"
+	"github.com/virtuald/go-paniclog"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/debug"
 	"golang.org/x/sys/windows/svc/eventlog"
 	"golang.org/x/sys/windows/svc/mgr"
-	kingpin "gopkg.in/alecthomas/kingpin.v2"
-	"www.velocidex.com/golang/velociraptor/config"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	crypto_utils "www.velocidex.com/golang/velociraptor/crypto/utils"
 	"www.velocidex.com/golang/velociraptor/executor"
 	"www.velocidex.com/golang/velociraptor/http_comms"
 	logging "www.velocidex.com/golang/velociraptor/logging"
+	"www.velocidex.com/golang/velociraptor/services/writeback"
 	"www.velocidex.com/golang/velociraptor/startup"
 	"www.velocidex.com/golang/velociraptor/utils"
 	"www.velocidex.com/golang/velociraptor/vql/tools"
@@ -90,7 +92,7 @@ func doInstall(config_obj *config_proto.Config) (err error) {
 	service_name := config_obj.Client.WindowsInstaller.ServiceName
 	logger := logging.GetLogger(config_obj, &logging.ClientComponent)
 
-	target_path := os.ExpandEnv(config_obj.Client.WindowsInstaller.InstallPath)
+	target_path := utils.ExpandEnv(config_obj.Client.WindowsInstaller.InstallPath)
 
 	executable, err := os.Executable()
 	if err != nil {
@@ -367,6 +369,23 @@ func getLogger(name string) (debug.Log, error) {
 	return elog, nil
 }
 
+// Try to emit a log to the system log file but this is not fatal - if
+// we cant for some reason we just move on.
+func tryToLog(name, message string) {
+	elog, err := getLogger(name)
+	if err != nil {
+		return
+	}
+	defer elog.Close()
+
+	elog.Info(1, message)
+	writeToStderr(message)
+}
+
+func writeToStderr(items ...string) {
+	println(time.Now().Format(time.RFC3339), ": ", strings.Join(items, " "))
+}
+
 func loadClientConfig() (*config_proto.Config, error) {
 	executable, err := os.Executable()
 	if err != nil {
@@ -401,24 +420,64 @@ func loadClientConfig() (*config_proto.Config, error) {
 	return config_obj, nil
 }
 
+func maybeWritePanicFile(name string, config_obj *config_proto.Config) {
+	if config_obj.Client == nil ||
+		config_obj.Client.PanicFile == "" {
+		return
+	}
+
+	// Make sure %TEMP% is set correctly here
+	executor.SetTempfile(config_obj)
+
+	panic_file_path := utils.ExpandEnv(config_obj.Client.PanicFile)
+	fd, err := os.OpenFile(panic_file_path,
+		os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
+	if err != nil {
+		Prelog("Error opening panic file: %v\n", err)
+		tryToLog(name, fmt.Sprintf("Error opening panic file: %v\n", err))
+		return
+	}
+
+	tryToLog(name, "Redirecting output to "+fd.Name())
+	_, err = paniclog.RedirectStderr(fd)
+	if err != nil {
+		writeToStderr("Error redirecting stderr ", err.Error())
+		return
+	}
+
+	fd.Close()
+}
+
 func doRun() error {
 	name := "Velociraptor"
 	config_obj, err := loadClientConfig()
-	if err == nil {
+	if err == nil && config_obj != nil &&
+		config_obj.Client != nil &&
+		config_obj.Client.WindowsInstaller != nil {
 		name = config_obj.Client.WindowsInstaller.ServiceName
 	}
 
+	if config_obj != nil {
+		maybeWritePanicFile(name, config_obj)
+		if config_obj.Client != nil {
+			config_obj.Client.PanicFile = ""
+		}
+	}
+
+	if err != nil {
+		writeToStderr("NewVelociraptorService:", err.Error())
+	}
 	ctx := context.Background()
 	service, err := NewVelociraptorService(ctx, name)
 	if err != nil {
-		Prelog("NewVelociraptorService: %v", err)
+		writeToStderr("NewVelociraptorService:", err.Error())
 		return err
 	}
 	defer service.Close()
 
 	isIntSess, err := svc.IsAnInteractiveSession()
 	if err != nil {
-		Prelog("IsAnInteractiveSession: %v", err)
+		writeToStderr("IsAnInteractiveSession: ", err.Error())
 		return err
 	}
 
@@ -428,7 +487,7 @@ func doRun() error {
 		err = svc.Run(name, service)
 	}
 	if err != nil {
-		Prelog("svc.Run: %v", err)
+		writeToStderr("svc.Run: ", err.Error())
 		return err
 	}
 
@@ -452,18 +511,17 @@ func (self *VelociraptorService) SetPause(value bool) {
 func (self *VelociraptorService) Execute(args []string,
 	r <-chan svc.ChangeRequest,
 	changes chan<- svc.Status) (ssec bool, errno uint32) {
-	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPauseAndContinue
+	const cmdsAccepted = svc.AcceptStop |
+		svc.AcceptShutdown | svc.AcceptPauseAndContinue
+
 	changes <- svc.Status{State: svc.StartPending}
 
 	// Start running and tell the SCM about it.
 	self.SetPause(false)
+
 	changes <- svc.Status{State: svc.Running, Accepts: cmdsAccepted}
 
-	elog, err := getLogger(self.name)
-	if err != nil {
-		return
-	}
-	defer elog.Close()
+	tryToLog(self.name, "Starting service "+self.name)
 
 loop:
 	for {
@@ -480,7 +538,7 @@ loop:
 					Accepts: cmdsAccepted,
 				}
 				self.SetPause(true)
-				elog.Info(1, "Service Paused")
+				tryToLog(self.name, "Service Paused")
 
 			case svc.Continue:
 				changes <- svc.Status{
@@ -488,30 +546,26 @@ loop:
 					Accepts: cmdsAccepted,
 				}
 				self.SetPause(false)
-				elog.Info(1, "Service Resumed")
+				tryToLog(self.name, "Service Resumed")
 
 			default:
-				elog.Error(1, fmt.Sprintf(
+				tryToLog(self.name, fmt.Sprintf(
 					"unexpected control request #%d", c))
 			}
 		}
 	}
 
 	changes <- svc.Status{State: svc.StopPending}
-	elog.Info(1, "Service Shutting Down")
+	tryToLog(self.name, "Service Shutting Down")
 	return
 }
 
 func (self *VelociraptorService) Close() {
-	elog, err := getLogger(self.name)
-	if err == nil {
-		elog.Info(1, fmt.Sprintf("%s service stopped", self.name))
-		elog.Close()
-	}
+	tryToLog(self.name, fmt.Sprintf("%s service stopped", self.name))
 }
 
 func runOnce(ctx context.Context,
-	wg *sync.WaitGroup, result *VelociraptorService, elog debug.Log) {
+	wg *sync.WaitGroup, result *VelociraptorService, log_name string) {
 	defer wg.Done()
 
 	// Spin forever waiting for a config file to be
@@ -525,7 +579,10 @@ func runOnce(ctx context.Context,
 		return
 	}
 
-	writeback, err := config.GetWriteback(config_obj.Client)
+	maybeWritePanicFile(log_name, config_obj)
+
+	writeback_service := writeback.GetWritebackService()
+	writeback, err := writeback_service.GetWriteback(config_obj)
 	if err != nil {
 		return
 	}
@@ -536,7 +593,7 @@ func runOnce(ctx context.Context,
 	exe, err := executor.NewClientExecutor(
 		ctx, writeback.ClientId, config_obj)
 	if err != nil {
-		elog.Error(1, fmt.Sprintf(
+		tryToLog(log_name, fmt.Sprintf(
 			"Can not create client: %v", err))
 		time.Sleep(10 * time.Second)
 		return
@@ -545,7 +602,7 @@ func runOnce(ctx context.Context,
 	_, err = http_comms.StartHttpCommunicatorService(
 		ctx, sm.Wg, config_obj, exe, on_error)
 	if err != nil {
-		elog.Error(1, fmt.Sprintf(
+		tryToLog(log_name, fmt.Sprintf(
 			"Can not create client: %v", err))
 		time.Sleep(10 * time.Second)
 		return
@@ -564,11 +621,6 @@ func runOnce(ctx context.Context,
 
 func NewVelociraptorService(
 	ctx context.Context, name string) (*VelociraptorService, error) {
-	elog, err := getLogger(name)
-	if err != nil {
-		return nil, err
-	}
-
 	result := &VelociraptorService{name: name}
 
 	go func() {
@@ -578,12 +630,13 @@ func NewVelociraptorService(
 			lwg.Add(1)
 			go func() {
 				defer cancel()
-				runOnce(subctx, lwg, result, elog)
+				runOnce(subctx, lwg, result, name)
 			}()
 
 			select {
 			case <-subctx.Done():
 				continue
+
 			case <-ctx.Done():
 				// Wait for the client to shutdown.
 				cancel()
@@ -626,11 +679,7 @@ func init() {
 			name := "velociraptor"
 			err = doRun()
 			if err != nil {
-				elog, err := getLogger(name)
-				kingpin.FatalIfError(err, "Unable to get logger")
-				defer elog.Close()
-
-				elog.Info(1, fmt.Sprintf(
+				tryToLog(name, fmt.Sprintf(
 					"Failed to start service: %v", err))
 			}
 

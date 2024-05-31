@@ -48,6 +48,7 @@ message NotebookSourceCell {
     string template = 1;
     string type = 2;
     string name = 4;
+    string output = 5;
     repeated ArtifactEnv env = 3;
 }
 
@@ -202,18 +203,37 @@ message Artifact {
     // Artifact was already compiled.
     bool compiled = 14;
 
-    // The artifact is considered built and and can not be overriden by the GUI
+    // The artifact is considered built in and can not be overriden by the GUI
     bool built_in = 20;
 
     // The artifact is built into the Velociraptor binary.
     bool compiled_in = 24;
     bool is_alias = 22;
+
+    // Artifact is inherited from the root org.
+    bool is_inherited = 26;
+
+    // Not read from the artifact definition but it is managed by the
+    // repository.
+    ArtifactMetadata metadata = 25;
 }
 
 message ArtifactDescriptors {
     repeated Artifact items = 1;
 }
 
+
+// Artifact can have metadata associated with them. The metadata can
+// be manipulated by the user, even for built in artifacts.
+message ArtifactMetadata {
+    // Do not show this artifact in the GUI search screen.
+    bool hidden = 1;
+    bool basic = 2;
+}
+
+message ArtifactMetadataStorage {
+    map<string, ArtifactMetadata> metadata = 1;
+}
 
 
 // Tools are external files that Velociraptor ensures are available to
@@ -319,4 +339,9 @@ message Resources {
     // Default resource use for the entire collection.
     uint64 max_rows = 2;
     uint64 max_upload_bytes = 3;
+
+    // Batching control
+    uint64 max_batch_wait = 7;
+    uint64 max_batch_rows = 8;
+    uint64 max_batch_rows_buffer = 9;
 }

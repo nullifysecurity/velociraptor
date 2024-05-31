@@ -8,6 +8,7 @@ import (
 	logging "www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/startup"
+	"www.velocidex.com/golang/velociraptor/utils"
 )
 
 var (
@@ -87,7 +88,7 @@ func doOrgUserAdd() error {
 
 	user_manager := services.GetUserManager()
 	record, err := user_manager.GetUserWithHashes(
-		ctx, *orgs_user_add_user)
+		ctx, utils.GetSuperuserName(config_obj), *orgs_user_add_user)
 	if err != nil {
 		return err
 	}
@@ -179,7 +180,8 @@ func doOrgDelete() error {
 	logger := logging.GetLogger(config_obj, &logging.ToolComponent)
 	logger.Info("Will remove org %v\n", *orgs_delete_org_id)
 
-	return org_manager.DeleteOrg(ctx, *orgs_delete_org_id)
+	return org_manager.DeleteOrg(ctx,
+		utils.GetSuperuserName(config_obj), *orgs_delete_org_id)
 }
 
 func init() {

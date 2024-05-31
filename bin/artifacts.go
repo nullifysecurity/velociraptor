@@ -1,19 +1,19 @@
 /*
-   Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+Velociraptor - Dig Deeper
+Copyright (C) 2019-2024 Rapid7 Inc.
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published
-   by the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package main
 
@@ -24,7 +24,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/Velocidex/ordereddict"
 	"github.com/Velocidex/yaml/v2"
@@ -35,6 +34,7 @@ import (
 	logging "www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/startup"
+	"www.velocidex.com/golang/velociraptor/utils"
 	"www.velocidex.com/golang/velociraptor/vql/acl_managers"
 )
 
@@ -83,14 +83,6 @@ var (
 		"output_level", "Compression level for zip output.").
 		Default("5").Int64()
 
-	artifact_command_collect_report = artifact_command_collect.Flag(
-		"report", "When specified we create a report html file.").
-		Default("").String()
-
-	artifact_command_collect_report_template = artifact_command_collect.Flag(
-		"report_template", "Use this artifact to provide the report template.").
-		Default("").String()
-
 	artificat_command_collect_admin_flag = artifact_command_collect.Flag(
 		"require_admin", "Ensure the user is an admin").Bool()
 
@@ -107,7 +99,7 @@ var (
 		Required().HintAction(listArtifactsHint).Strings()
 
 	artifact_command_collect_args = artifact_command_collect.Flag(
-		"args", "Artifact args.").Strings()
+		"args", "Artifact args (e.g. --args Foo=Bar).").Strings()
 
 	artifact_command_collect_hardmemory = artifact_command_collect.Flag(
 		"hard_memory_limit", "If we reach this memory limit in bytes we exit.").Uint64()
@@ -204,19 +196,16 @@ func doArtifactCollect() error {
 		return err
 	}
 
-	logger := log.New(&LogWriter{config_obj}, "", 0)
-
+	logger := &LogWriter{config_obj: config_obj}
 	scope := manager.BuildScope(services.ScopeBuilder{
 		Config:     config_obj,
 		ACLManager: acl_managers.NullACLManager{},
-		Logger:     logger,
+		Logger:     log.New(&LogWriter{config_obj: config_obj}, "", 0),
 		Env: ordereddict.NewDict().
 			Set("Artifacts", *artifact_command_collect_names).
 			Set("Output", *artifact_command_collect_output).
 			Set("Level", *artifact_command_collect_output_compression).
 			Set("Password", *artifact_command_collect_output_password).
-			Set("Report", *artifact_command_collect_report).
-			Set("Template", *artifact_command_collect_report_template).
 			Set("Args", spec).
 			Set("Format", *artifact_command_collect_format).
 			Set("Timeout", *artifact_command_collect_timeout).
@@ -247,12 +236,11 @@ func doArtifactCollect() error {
 		Nanny.Start(ctx, &sync.WaitGroup{})
 	}
 
-	now := time.Now()
+	start := utils.GetTime().Now()
 	defer func() {
 		logging.GetLogger(config_obj, &logging.ToolComponent).
 			Info("Collection completed in %v Seconds",
-				time.Now().Unix()-now.Unix())
-
+				utils.GetTime().Now().Sub(start))
 	}()
 
 	if *trace_vql_flag {
@@ -261,14 +249,18 @@ func doArtifactCollect() error {
 	}
 
 	query := `
-  SELECT * FROM collect(artifacts=Artifacts, output=Output, report=Report,
-                        level=Level, template=Template,
-                        timeout=Timeout, progress_timeout=ProgressTimeout,
-                        cpu_limit=CpuLimit,
-                        password=Password, args=Args, format=Format)`
-	return eval_local_query(
+  SELECT * FROM collect(
+     artifacts=Artifacts, output=Output,
+     level=Level, timeout=Timeout, progress_timeout=ProgressTimeout,
+     cpu_limit=CpuLimit, password=Password, args=Args, format=Format)`
+	err = eval_local_query(
 		sm.Ctx, config_obj,
 		*artifact_command_collect_format, query, scope)
+	if err != nil {
+		return err
+	}
+
+	return logger.Error
 }
 
 func getFilterRegEx(pattern string) (*regexp.Regexp, error) {

@@ -2,7 +2,6 @@ package hunt_dispatcher
 
 import (
 	"context"
-	"errors"
 	"path"
 	"sort"
 
@@ -40,15 +39,11 @@ func FindCollectedArtifacts(
 	}
 }
 
+// This function is deprecated.
 func (self *HuntDispatcher) ListHunts(
 	ctx context.Context, config_obj *config_proto.Config,
 	in *api_proto.ListHuntsRequest) (
 	*api_proto.ListHuntsResponse, error) {
-
-	dispatcher, err := services.GetHuntDispatcher(config_obj)
-	if err != nil {
-		return nil, err
-	}
 
 	end := in.Count + in.Offset
 	if end > 1000 {
@@ -59,7 +54,7 @@ func (self *HuntDispatcher) ListHunts(
 	// creation time. This should be very fast because all hunts
 	// are kept in memory inside the hunt dispatcher.
 	items := make([]*api_proto.Hunt, 0, end)
-	err = dispatcher.ApplyFuncOnHunts(
+	err := self.ApplyFuncOnHunts(ctx, services.AllHunts,
 		func(hunt *api_proto.Hunt) error {
 			if in.UserFilter != "" &&
 				in.UserFilter != hunt.Creator {
@@ -93,34 +88,6 @@ func (self *HuntDispatcher) ListHunts(
 	return &api_proto.ListHuntsResponse{
 		Items: items[in.Offset:end],
 	}, nil
-}
-
-func GetHunt(
-	ctx context.Context, config_obj *config_proto.Config,
-	in *api_proto.GetHuntRequest) (hunt *api_proto.Hunt, err error) {
-
-	var hunt_obj *api_proto.Hunt
-
-	dispatcher, err := services.GetHuntDispatcher(config_obj)
-	if err != nil {
-		return nil, err
-	}
-
-	hunt_obj, pres := dispatcher.GetHunt(in.HuntId)
-	if !pres {
-		return nil, errors.New("Hunt not found")
-	}
-
-	// Normalize the hunt object
-	FindCollectedArtifacts(ctx, config_obj, hunt_obj)
-
-	if hunt_obj == nil || hunt_obj.Stats == nil {
-		return nil, errors.New("Not found")
-	}
-
-	hunt_obj.Stats.AvailableDownloads, _ = availableHuntDownloadFiles(config_obj, in.HuntId)
-
-	return hunt_obj, nil
 }
 
 // availableHuntDownloadFiles returns the prepared zip downloads available to

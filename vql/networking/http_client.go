@@ -1,6 +1,6 @@
 /*
 Velociraptor - Dig Deeper
-Copyright (C) 2019-2022 Rapid7 Inc.
+Copyright (C) 2019-2024 Rapid7 Inc.
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published
@@ -21,25 +21,26 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Velocidex/ordereddict"
+	"gopkg.in/yaml.v2"
 	"www.velocidex.com/golang/velociraptor/acls"
 	"www.velocidex.com/golang/velociraptor/artifacts"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
-	constants "www.velocidex.com/golang/velociraptor/constants"
+	"www.velocidex.com/golang/velociraptor/constants"
+	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/utils"
 	"www.velocidex.com/golang/velociraptor/vql"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
+	"www.velocidex.com/golang/velociraptor/vql/functions"
 	vfilter "www.velocidex.com/golang/vfilter"
 	"www.velocidex.com/golang/vfilter/arg_parser"
 	"www.velocidex.com/golang/vfilter/types"
@@ -70,20 +71,29 @@ func (self *HTTPClientCache) getCacheKey(url *url.URL) string {
 }
 
 type HttpPluginRequest struct {
-	Url     string      `vfilter:"required,field=url,doc=The URL to fetch"`
-	Params  vfilter.Any `vfilter:"optional,field=params,doc=Parameters to encode as POST or GET query strings"`
-	Headers vfilter.Any `vfilter:"optional,field=headers,doc=A dict of headers to send."`
-	Method  string      `vfilter:"optional,field=method,doc=HTTP method to use (GET, POST, PUT, PATCH, DELETE)"`
-	Data    string      `vfilter:"optional,field=data,doc=If specified we write this raw data into a POST request instead of encoding the params above."`
-	Chunk   int         `vfilter:"optional,field=chunk_size,doc=Read input with this chunk size and send each chunk as a row"`
+	Url string `vfilter:"required,field=url,doc=The URL to fetch"`
+
+	// Filled in from the Url field or the secret. Store in a
+	// different variable to avoid logging the URL which may have
+	// secrets in it.
+	real_url string
+
+	Params  *ordereddict.Dict `vfilter:"optional,field=params,doc=Parameters to encode as POST or GET query strings"`
+	Headers *ordereddict.Dict `vfilter:"optional,field=headers,doc=A dict of headers to send."`
+	Method  string            `vfilter:"optional,field=method,doc=HTTP method to use (GET, POST, PUT, PATCH, DELETE)"`
+	Data    string            `vfilter:"optional,field=data,doc=If specified we write this raw data into a POST request instead of encoding the params above."`
+	Chunk   int               `vfilter:"optional,field=chunk_size,doc=Read input with this chunk size and send each chunk as a row"`
 
 	// Sometimes it is useful to be able to query misconfigured hosts.
-	DisableSSLSecurity bool              `vfilter:"optional,field=disable_ssl_security,doc=Disable ssl certificate verifications (deprecated in favor of SkipVerify)."`
-	SkipVerify         bool              `vfilter:"optional,field=skip_verify,doc=Disable ssl certificate verifications."`
-	TempfileExtension  string            `vfilter:"optional,field=tempfile_extension,doc=If specified we write to a tempfile. The content field will contain the full path to the tempfile."`
-	RemoveLast         bool              `vfilter:"optional,field=remove_last,doc=If set we delay removal as much as possible."`
-	RootCerts          string            `vfilter:"optional,field=root_ca,doc=As a better alternative to disable_ssl_security, allows root ca certs to be added here."`
-	CookieJar          *ordereddict.Dict `vfilter:"optional,field=cookie_jar,doc=A cookie jar to use if provided. This is a dict of cookie structures."`
+	DisableSSLSecurity bool                `vfilter:"optional,field=disable_ssl_security,doc=Disable ssl certificate verifications (deprecated in favor of SkipVerify)."`
+	SkipVerify         bool                `vfilter:"optional,field=skip_verify,doc=Disable ssl certificate verifications."`
+	TempfileExtension  string              `vfilter:"optional,field=tempfile_extension,doc=If specified we write to a tempfile. The content field will contain the full path to the tempfile."`
+	RemoveLast         bool                `vfilter:"optional,field=remove_last,doc=If set we delay removal as much as possible."`
+	RootCerts          string              `vfilter:"optional,field=root_ca,doc=As a better alternative to disable_ssl_security, allows root ca certs to be added here."`
+	CookieJar          *ordereddict.Dict   `vfilter:"optional,field=cookie_jar,doc=A cookie jar to use if provided. This is a dict of cookie structures."`
+	UserAgent          string              `vfilter:"optional,field=user_agent,doc=If specified, set a HTTP User-Agent."`
+	Secret             string              `vfilter:"optional,field=secret,doc=If specified, use this managed secret. The secret should be of type 'HTTP Secrets'. Alternatively specify the Url as secret://name"`
+	Files              []*ordereddict.Dict `vfilter:"optional,field=files,doc=If specified, upload these files using multipart form upload. For example [dict(file=\"My filename.txt\", path=OSPath, accessor=\"auto\"),]"`
 }
 
 type _HttpPluginResponse struct {
@@ -111,6 +121,88 @@ func GetHttpClient(
 	return cache.GetHttpClient(ctx, config_obj, arg, scope)
 }
 
+func (self *HTTPClientCache) mergeSecretToRequest(
+	ctx context.Context, scope vfilter.Scope,
+	arg *HttpPluginRequest, secret_name string) error {
+
+	config_obj, ok := vql_subsystem.GetServerConfig(scope)
+	if !ok {
+		return errors.New("Secrets may only be used on the server")
+	}
+
+	secrets_service, err := services.GetSecretsService(config_obj)
+	if err != nil {
+		return err
+	}
+
+	principal := vql_subsystem.GetPrincipal(scope)
+
+	secret_record, err := secrets_service.GetSecret(ctx, principal,
+		constants.HTTP_SECRETS, secret_name)
+	if err != nil {
+		return err
+	}
+
+	get := func(field string, target *string) {
+		res := vql_subsystem.GetStringFromRow(
+			scope, secret_record.Data, field)
+		if res != "" {
+			*target = res
+		}
+	}
+
+	get_bool := func(field string, target *bool) {
+		res := vql_subsystem.GetStringFromRow(
+			scope, secret_record.Data, field)
+		if res != "" {
+			*target = vql_subsystem.GetBoolFromString(res)
+		}
+	}
+
+	// We expect Dict parameters to be a YAML formatted object.
+	get_dict := func(field string, target *ordereddict.Dict) {
+		res := vql_subsystem.GetStringFromRow(
+			scope, secret_record.Data, field)
+		if res != "" {
+			tmp := make(map[string]string)
+			err := yaml.Unmarshal([]byte(res), tmp)
+			if err != nil {
+				scope.Log("Secret: parsing field %v invalid yaml: %v",
+					field, err)
+				return
+			}
+			for k, v := range tmp {
+				if v != "" {
+					target.Set(k, v)
+				}
+			}
+		}
+	}
+
+	if arg.Params == nil {
+		arg.Params = ordereddict.NewDict()
+	}
+
+	if arg.Headers == nil {
+		arg.Headers = ordereddict.NewDict()
+	}
+
+	if arg.CookieJar == nil {
+		arg.CookieJar = ordereddict.NewDict()
+	}
+
+	get("url", &arg.real_url)
+	get("method", &arg.Method)
+	get("user_agent", &arg.UserAgent)
+	get("root_ca", &arg.RootCerts)
+	get_bool("skip_verify", &arg.SkipVerify)
+	get_dict("extra_params", arg.Params)
+	get_dict("extra_headers", arg.Headers)
+	get_dict("cookies", arg.CookieJar)
+
+	return nil
+}
+
 func (self *HTTPClientCache) GetHttpClient(
 	ctx context.Context,
 	config_obj *config_proto.ClientConfig,
@@ -126,6 +218,15 @@ func (self *HTTPClientCache) GetHttpClient(
 		return nil, err
 	}
 
+	if url_obj.Scheme == "secret" {
+		err = self.mergeSecretToRequest(ctx, scope, arg, url_obj.Host)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		arg.real_url = arg.Url
+	}
+
 	key := self.getCacheKey(url_obj)
 	result, pres := self.cache[key]
 	if pres {
@@ -134,12 +235,12 @@ func (self *HTTPClientCache) GetHttpClient(
 
 	// Allow a unix path to be interpreted as simply a http over
 	// unix domain socket (used by e.g. docker)
-	if strings.HasPrefix(arg.Url, "/") {
-		components := strings.Split(arg.Url, ":")
+	if strings.HasPrefix(arg.real_url, "/") {
+		components := strings.Split(arg.real_url, ":")
 		if len(components) == 1 {
 			components = append(components, "/")
 		}
-		arg.Url = "http://unix" + components[1]
+		arg.real_url = "http://unix" + components[1]
 
 		result = &httpClientWrapper{
 			Client: http.Client{
@@ -224,44 +325,21 @@ func GetDefaultHTTPClient(
 	}, nil
 }
 
-func encodeParams(arg *HttpPluginRequest, scope vfilter.Scope) *url.Values {
-	data := url.Values{}
-	if arg.Params != nil {
-		for _, member := range scope.GetMembers(arg.Params) {
-			value, pres := scope.Associative(arg.Params, member)
-			if pres {
-				slice := reflect.ValueOf(value)
-				if slice.Type().Kind() == reflect.Slice {
-					for i := 0; i < slice.Len(); i++ {
-						value := slice.Index(i).Interface()
-						item, ok := value.(string)
-						if ok {
-							data.Add(member, item)
-							continue
-						}
-					}
-				}
-				switch value.(type) {
-				case vfilter.Null, *vfilter.Null:
-					continue
-				default:
-					data.Add(member, fmt.Sprintf("%v", value))
-				}
-			}
-		}
-	}
-	return &data
-}
-
 func (self *_HttpPlugin) Call(
 	ctx context.Context,
 	scope vfilter.Scope,
 	args *ordereddict.Dict) <-chan vfilter.Row {
+
 	output_chan := make(chan vfilter.Row)
 	arg := &HttpPluginRequest{}
 	err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
 	if err != nil {
 		goto error
+	}
+
+	// A secret is specified
+	if arg.Secret != "" {
+		arg.Url = "secret://" + arg.Secret
 	}
 
 	if arg.Chunk == 0 {
@@ -274,6 +352,7 @@ func (self *_HttpPlugin) Call(
 
 	go func() {
 		defer close(output_chan)
+		defer vql_subsystem.RegisterMonitor("http_client", args)()
 
 		err := vql_subsystem.CheckAccess(scope, acls.COLLECT_SERVER)
 		if err != nil {
@@ -302,34 +381,71 @@ func (self *_HttpPlugin) Call(
 		}
 
 		var req *http.Request
-		params := encodeParams(arg, scope)
-		switch method := strings.ToUpper(arg.Method); method {
+		var params url.Values
+		if arg.Params != nil {
+			params = functions.EncodeParams(arg.Params, scope)
+		}
+		method := strings.ToUpper(arg.Method)
+
+		switch method {
 		case "GET":
 			{
 				req, err = http.NewRequestWithContext(
-					ctx, method, arg.Url, strings.NewReader(arg.Data))
+					ctx, method, arg.real_url, strings.NewReader(arg.Data))
 				if err != nil {
 					scope.Log("%s: %v", self.Name(), err)
 					return
 				}
 				req.URL.RawQuery = params.Encode()
 			}
+
 		case "POST", "PUT", "PATCH", "DELETE":
 			{
-				// Set body to params if arg.Data is empty
-				if arg.Data == "" && len(*params) != 0 {
-					arg.Data = params.Encode()
-				} else if arg.Data != "" && len(*params) != 0 {
-					// Shouldn't set both params and data. Warn user
-					scope.Log("http_client: Both params and data set. Defaulting to data.")
+				var reader io.Reader
+
+				if arg.Data != "" {
+					reader = strings.NewReader(arg.Data)
 				}
+
+				if len(params) != 0 {
+					if reader != nil {
+						// Shouldn't set both params and data. Warn user
+						scope.Log("http_client: Both params and data set. Defaulting to data.")
+					} else {
+						reader = strings.NewReader(params.Encode())
+					}
+				}
+
+				if len(arg.Files) != 0 {
+					if arg.Data != "" {
+						scope.Log("http_client: Both files and data set. Defaulting to data.")
+					} else {
+						mp_reader, err := GetMultiPartReader(ctx, scope,
+							arg.Files, arg.Params)
+						if err != nil {
+							scope.Log("http_client: %v", err)
+							return
+						}
+
+						reader = mp_reader.Reader()
+						if arg.Headers == nil {
+							arg.Headers = ordereddict.NewDict()
+						}
+
+						arg.Headers.
+							Set("Content-Type", mp_reader.ContentType()).
+							Set("Content-Length", mp_reader.ContentLength())
+					}
+				}
+
 				req, err = http.NewRequestWithContext(
-					ctx, method, arg.Url, strings.NewReader(arg.Data))
+					ctx, method, arg.real_url, reader)
 				if err != nil {
 					scope.Log("%s: %v", self.Name(), err)
 					return
 				}
 			}
+
 		default:
 			{
 				scope.Log("http_client: Invalid HTTP Method %s", method)
@@ -338,8 +454,11 @@ func (self *_HttpPlugin) Call(
 		}
 
 		scope.Log("Fetching %v\n", arg.Url)
+		if arg.UserAgent == "" {
+			arg.UserAgent = constants.USER_AGENT
+		}
 
-		req.Header.Set("User-Agent", constants.USER_AGENT)
+		req.Header.Set("User-Agent", arg.UserAgent)
 
 		// Set various headers
 		if arg.Headers != nil {
@@ -438,15 +557,16 @@ func (self *_HttpPlugin) Call(
 			n, err := io.ReadFull(http_resp.Body, buf)
 			if n > 0 {
 				response.Content = string(buf[:n])
-				select {
-				case <-ctx.Done():
-					return
-				case output_chan <- response:
-				}
+			} else if errors.Is(err, io.EOF) {
+				response.Content = ""
+			} else if err != nil {
+				break
 			}
 
-			if err == io.EOF {
-				break
+			select {
+			case <-ctx.Done():
+				return
+			case output_chan <- response:
 			}
 
 			if err != nil {

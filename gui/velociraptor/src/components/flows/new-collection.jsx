@@ -33,8 +33,8 @@ import api from '../core/api-service.jsx';
 import {CancelToken} from 'axios';
 
 class PaginationBuilder {
-    PaginationSteps = ["Select Artifacts", "Configure Parameters",
-                       "Specify Resources", "Review", "Launch"];
+    PaginationSteps = [T("Select Artifacts"), T("Configure Parameters"),
+                       T("Specify Resources"), T("Review"), T("Launch")];
 
     constructor(name, title, shouldFocused) {
         this.title = title;
@@ -237,6 +237,10 @@ class NewCollectionSelectArtifacts extends React.Component {
         // First set all the artifacts in the spec.
         let artifacts = [];
         _.each(spec, x=>artifacts.push(x.artifact));
+
+        if(_.isEmpty(artifacts)) {
+            return;
+        }
 
         api.post("v1/GetArtifacts", {
             type: this.props.artifactType,
@@ -572,7 +576,7 @@ class NewCollectionResources extends React.Component {
                   </Form.Group>
 
                   <Form.Group as={Row}>
-                    <Form.Label column sm="3">{T("Max Mb Uploaded")}</Form.Label>
+                    <Form.Label column sm="3">{T("Max bytes uploaded")}</Form.Label>
                     <Col sm="8">
                       <ValidatedInteger
                         placeholder={this.getMaxUploadBytes(this.props.artifacts)}
@@ -852,6 +856,12 @@ class NewCollectionWizard extends React.Component {
             initialized_from_parent: true,
         });
 
+        if (_.isEmpty(request.artifacts)) {
+            this.setState({artifacts:[]});
+            return;
+        }
+
+
         // Resolve the artifacts from the request into a list of descriptors.
         api.post("v1/GetArtifacts",
                 {names: request.artifacts}, this.source.token).then(response=>{
@@ -906,6 +916,15 @@ class NewCollectionWizard extends React.Component {
             };
 
             _.each(this.state.parameters[item.name], (v, k) => {
+                if (k==="max_batch_wait") {
+                    spec.max_batch_wait = v;
+                    return;
+                }
+                if (k==="max_batch_rows") {
+                    spec.max_batch_rows = v;
+                    return;
+                }
+
                 spec.parameters.env.push({key: k, value: v});
             });
             specs.push(spec);
@@ -1013,45 +1032,46 @@ class NewCollectionWizard extends React.Component {
                    onHide={this.props.onCancel}>
               <HotKeys keyMap={keymap} handlers={handlers}><ObserveKeys>
                   <StepWizard ref={n=>this.step=n}>
-                  <NewCollectionSelectArtifacts
-                    artifacts={this.state.artifacts}
-                    artifactType={type}
-                    paginator={new PaginationBuilder(
-                        "Select Artifacts",
-                        "New Collection: Select Artifacts to collect")}
-                    setArtifacts={this.setArtifacts}
-                    setParameters={this.setParameters}
+                    <NewCollectionSelectArtifacts
+                      artifacts={this.state.artifacts}
+                      artifactType={type}
+                      paginator={new PaginationBuilder(
+                          T("Select Artifacts"),
+                          T("New Collection: Select Artifacts to collect"))}
+                      setArtifacts={this.setArtifacts}
+                      setParameters={this.setParameters}
                     />
 
-                  <NewCollectionConfigParameters
-                    parameters={this.state.parameters}
-                    setParameters={this.setParameters}
-                    artifacts={this.state.artifacts}
-                    setArtifacts={this.setArtifacts}
-                    paginator={new PaginationBuilder(
-                        "Configure Parameters",
-                        "New Collection: Configure Parameters")}
-                    request={request}/>
+                    <NewCollectionConfigParameters
+                      parameters={this.state.parameters}
+                      setParameters={this.setParameters}
+                      artifacts={this.state.artifacts}
+                      setArtifacts={this.setArtifacts}
+                      configureResourceControl={true}
+                      paginator={new PaginationBuilder(
+                          T("Configure Parameters"),
+                          T("New Collection: Configure Parameters"))}
+                      request={request}/>
 
-                  <NewCollectionResources
-                    artifacts={this.state.artifacts}
-                    resources={this.state.resources}
-                    paginator={new PaginationBuilder(
-                        "Specify Resources",
-                        "New Collection: Specify Resources")}
-                    setResources={this.setResources} />
+                    <NewCollectionResources
+                      artifacts={this.state.artifacts}
+                      resources={this.state.resources}
+                      paginator={new PaginationBuilder(
+                          T("Specify Resources"),
+                          T("New Collection: Specify Resources"))}
+                      setResources={this.setResources} />
 
-                  <NewCollectionRequest
-                    paginator={new PaginationBuilder(
-                        "Review",
-                        "New Collection: Review request")}
-                    request={this.prepareRequest()} />
+                    <NewCollectionRequest
+                      paginator={new PaginationBuilder(
+                          T("Review"),
+                          T("New Collection: Review request"))}
+                      request={this.prepareRequest()} />
 
                     <NewCollectionLaunch
                       artifacts={this.state.artifacts}
                       paginator={new PaginationBuilder(
-                          "Launch",
-                          "New Collection: Launch collection")}
+                          T("Launch"),
+                          T("New Collection: Launch collection"))}
                       launch={this.launch} />
                 </StepWizard>
                 </ObserveKeys></HotKeys>

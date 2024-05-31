@@ -137,7 +137,7 @@ func TestClientUploaderSparseWithEOF(t *testing.T) {
 }
 
 func TestClientUploaderMultipleBuffers(t *testing.T) {
-	cancel := utils.MockTime(&utils.MockClock{MockNow: time.Unix(10, 10)})
+	cancel := utils.MockTime(utils.NewMockClock(time.Unix(10, 10)))
 	defer cancel()
 
 	responder_obj := responder.TestResponderWithFlowId(
@@ -156,7 +156,7 @@ func TestClientUploaderMultipleBuffers(t *testing.T) {
 		"file", nil,
 
 		// Expected_size
-		1000, nilTime, nilTime, nilTime, nilTime,
+		1000, nilTime, nilTime, nilTime, nilTime, 0,
 		bytes.NewBufferString("Hello world Hello world"))
 	assert.NoError(t, err)
 
@@ -181,7 +181,7 @@ func TestClientUploaderMultipleBuffers(t *testing.T) {
 }
 
 func TestClientUploaderMultipleUploads(t *testing.T) {
-	cancel := utils.MockTime(&utils.MockClock{MockNow: time.Unix(10, 10)})
+	cancel := utils.MockTime(utils.NewMockClock(time.Unix(10, 10)))
 	defer cancel()
 
 	responder_obj := responder.TestResponderWithFlowId(
@@ -205,7 +205,7 @@ func TestClientUploaderMultipleUploads(t *testing.T) {
 			"file", nil,
 
 			// Expected_size
-			1000, nilTime, nilTime, nilTime, nilTime,
+			1000, nilTime, nilTime, nilTime, nilTime, 0,
 			bytes.NewBufferString("Hello world"))
 		assert.NoError(t, err)
 	}
@@ -266,7 +266,7 @@ func TestClientUploaderCompletelySparse(t *testing.T) {
 }
 
 func TestClientUploaderSparseMultiBuffer(t *testing.T) {
-	cancel := utils.MockTime(&utils.MockClock{MockNow: time.Unix(10, 10)})
+	cancel := utils.MockTime(utils.NewMockClock(time.Unix(10, 10)))
 	defer cancel()
 
 	resp := responder.TestResponderWithFlowId(
@@ -326,12 +326,12 @@ func TestClientUploaderSparseMultiBuffer(t *testing.T) {
 
 // Upload multiple files.
 
-// * Each file should have 2 messages - one with the full data and one
-//   with EOF message.
-// * Each message should have an upload ID incrementing from 0 for all
-//   packets in the same file.
+//   - Each file should have 2 messages - one with the full data and one
+//     with EOF message.
+//   - Each message should have an upload ID incrementing from 0 for all
+//     packets in the same file.
 func TestClientUploaderUploadId(t *testing.T) {
-	cancel := utils.MockTime(&utils.MockClock{MockNow: time.Unix(10, 10)})
+	cancel := utils.MockTime(utils.NewMockClock(time.Unix(10, 10)))
 	defer cancel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -353,7 +353,7 @@ func TestClientUploaderUploadId(t *testing.T) {
 		scope := vql_subsystem.MakeScope()
 		_, err := uploader.Upload(ctx, scope,
 			ospath, "data", nil, int64(len(data)),
-			nilTime, nilTime, nilTime, nilTime, fd)
+			nilTime, nilTime, nilTime, nilTime, 0, fd)
 		assert.NoError(t, err)
 	}
 
@@ -369,7 +369,7 @@ func TestClientUploaderUploadId(t *testing.T) {
 // deduplicate the files based on store_as_name so only actually
 // upload a single file.
 func TestClientUploaderDeduplicateStoreAsName(t *testing.T) {
-	cancel := utils.MockTime(&utils.MockClock{MockNow: time.Unix(10, 10)})
+	cancel := utils.MockTime(utils.NewMockClock(time.Unix(10, 10)))
 	defer cancel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
@@ -397,7 +397,7 @@ func TestClientUploaderDeduplicateStoreAsName(t *testing.T) {
 		ospath := accessors.MustNewLinuxOSPath(fmt.Sprintf("file_%d", i))
 		_, err := uploader.Upload(ctx, scope,
 			ospath, "data", store_as_name, int64(len(data)),
-			nilTime, nilTime, nilTime, nilTime, fd)
+			nilTime, nilTime, nilTime, nilTime, 0, fd)
 		assert.NoError(t, err)
 	}
 

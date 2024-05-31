@@ -3,7 +3,12 @@ import _ from 'lodash';
 import React from 'react';
 import PropTypes from 'prop-types';
 
-import parse from 'html-react-parser';
+import T from '../i8n/i8n.jsx';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+
+import Button from 'react-bootstrap/Button';
+import parseHTML from '../core/sanitize.jsx';
+
 import VeloTable from '../core/table.jsx';
 import TimelineRenderer from "../timeline/timeline.jsx";
 import { VeloLineChart, VeloTimeChart } from '../artifacts/line-charts.jsx';
@@ -13,9 +18,12 @@ import { NotebookLineChart, NotebookTimeChart,
 
 import NotebookTableRenderer from './notebook-table-renderer.jsx';
 
+import VeloValueRenderer from '../utils/value.jsx';
+import { JSONparse } from '../utils/json_parse.jsx';
 
-const parse_param = domNode=>JSON.parse(decodeURIComponent(
-    domNode.attribs.params || "{}"));
+
+const parse_param = domNode=>JSONparse(decodeURIComponent(
+    domNode.attribs.params, {}));
 
 export default class NotebookReportRenderer extends React.Component {
     static propTypes = {
@@ -23,6 +31,10 @@ export default class NotebookReportRenderer extends React.Component {
         refresh: PropTypes.func,
         cell: PropTypes.object,
         notebook_id: PropTypes.string,
+
+        // Will be called with addtional completions
+        completion_reporter: PropTypes.func
+,
     };
 
     // Notebook charts make API calls to actually get their data.
@@ -59,7 +71,7 @@ export default class NotebookReportRenderer extends React.Component {
         let value = decodeURIComponent(domNode.attribs.value || "");
         let match = re.exec(value);
         let data = this.state.data[match[1]];
-        let rows = JSON.parse(data.Response);
+        let rows = JSONparse(data.Response, []);
 
         switch  (domNode.name) {
         case "grr-line-chart":
@@ -77,20 +89,35 @@ export default class NotebookReportRenderer extends React.Component {
     }
 
     render() {
-        let output = this.props.cell && this.props.cell.output;
-        if (!output) {
-            return <hr/>;
+        let result = [];
+        if (this.props.cell && this.props.cell.calculating && !this.props.cell.output) {
+            result.push(<div className="padded" key="1">
+                          {T("Calculating...")}
+                          <span className="padded">
+                            <FontAwesomeIcon icon="spinner" spin/>
+                          </span>
+                        </div>);
         }
 
-        let template = parse(this.props.cell.output, {
+        let output = this.props.cell && this.props.cell.output;
+        if (!output) {
+            result.push(<hr key="2"/>);
+            return result;
+        }
+
+        let template = parseHTML(this.props.cell.output, {
             replace: (domNode) => {
                 // A table which contains the data inline.
                 if (domNode.name === "inline-table-viewer") {
                     try {
-                        let data = JSON.parse(this.props.cell.data || '{}');
+                        let data = JSONparse(this.props.cell.data, {});
                         let value = decodeURIComponent(domNode.attribs.value || "");
                         let response = data[value] || {};
-                        let rows = JSON.parse(response.Response);
+                        let rows = JSONparse(response.Response, []);
+                        if(this.props.completion_reporter) {
+                            this.props.completion_reporter(response.Columns);
+                        }
+
                         return (
                             <VeloTable
                               env={this.props.env}
@@ -102,6 +129,11 @@ export default class NotebookReportRenderer extends React.Component {
 
                     };
                 }
+
+                if (domNode.name === "velo-value") {
+                    let value = decodeURIComponent(domNode.attribs.value || "");
+                    return <VeloValueRenderer value={value}/>;
+                };
 
                 if (domNode.name === "grr-timeline") {
                     let name = decodeURIComponent(domNode.attribs.name || "");
@@ -121,6 +153,7 @@ export default class NotebookReportRenderer extends React.Component {
                               env={this.props.env}
                               refresh={this.props.refresh}
                               params={parse_param(domNode)}
+                              completion_reporter={this.props.completion_reporter}
                             />
                         );
                     } catch(e) {
@@ -141,8 +174,8 @@ export default class NotebookReportRenderer extends React.Component {
                 return domNode;
             }
         });
-        return (
-            <div  className="report-viewer">{template}</div>
-        );
+
+        result.push(<div key="3" className="report-viewer">{template}</div>);
+        return result;
     }
 };

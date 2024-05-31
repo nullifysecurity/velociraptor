@@ -1,8 +1,9 @@
+//go:build darwin
 // +build darwin
 
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+   Copyright (C) 2019-2024 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -82,7 +83,7 @@ func doInstall() error {
 
 	service_name := config_obj.Client.DarwinInstaller.ServiceName
 	logger := logging.GetLogger(config_obj, &logging.ClientComponent)
-	target_path := os.ExpandEnv(config_obj.Client.DarwinInstaller.InstallPath)
+	target_path := utils.ExpandEnv(config_obj.Client.DarwinInstaller.InstallPath)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

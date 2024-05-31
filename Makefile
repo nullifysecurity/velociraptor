@@ -17,7 +17,7 @@ golden:
 	./output/velociraptor -v --config artifacts/testdata/windows/test.config.yaml golden artifacts/testdata/server/testcases/ --env srcDir=`pwd` --filter=${GOLDEN}
 
 debug_golden:
-	dlv debug --build-flags="-tags 'server_vql extras'" ./bin/ -- --config artifacts/testdata/windows/test.config.yaml golden artifacts/testdata/server/testcases/ --env srcDir=`pwd` --disable_alarm -v --filter=${GOLDEN}
+	dlv debug --build-flags="-tags 'server_vql extras'" ./bin/ -- --config artifacts/testdata/windows/test.config.yaml golden artifacts/testdata/server/testcases/ --env srcDir=`pwd` --disable_alarm -v --debug --filter=${GOLDEN}
 
 references:
 	./output/velociraptor vql export docs/references/vql.yaml > docs/references/vql.yaml.tmp
@@ -39,8 +39,14 @@ darwin_m1:
 linux_m1:
 	go run make.go -v LinuxM1
 
+linux_arm64:
+	go run make.go -v LinuxArm64
+
 linux_musl:
 	go run make.go -v LinuxMusl
+
+linux_musl_debug:
+	go run make.go -v LinuxMuslDebug
 
 linux:
 	go run make.go -v linux
@@ -89,6 +95,9 @@ KapeFilesSync:
 SQLECmdSync:
 	python3 scripts/sqlecmd_convert.py ~/projects/SQLECmd/ ~/projects/KapeFiles/ artifacts/definitions/Generic/Collectors/SQLECmd.yaml
 
+SQLiteHunter:
+	cp ~/projects/SQLiteHunter/output/SQLiteHunter.yaml artifacts/definitions/Generic/Forensic/SQLiteHunter.yaml
+
 # Do this after fetching the build artifacts with `gh run download <RunID>`
 UpdateCIArtifacts:
 	mv artifact/server/* artifacts/testdata/server/testcases/
@@ -102,3 +111,9 @@ UpdateCerts:
 # First git checkout origin/v0.6.3
 archive_artifacts:
 	zip -r release_artifacts_$(basename "$(git status | head -1)").zip artifacts/definitions/ -i \*.yaml
+
+translations:
+	python3 ./scripts/find_i8n_translations.py ./gui/velociraptor/src/components/i8n/
+
+config_check:
+	go run ./docs/references/sample_config/main.go ./docs/references/server.config.yaml

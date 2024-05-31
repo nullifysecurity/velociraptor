@@ -15,6 +15,7 @@ import (
 	"www.velocidex.com/golang/velociraptor/accessors"
 	"www.velocidex.com/golang/velociraptor/acls"
 	"www.velocidex.com/golang/velociraptor/artifacts"
+	"www.velocidex.com/golang/velociraptor/constants"
 	"www.velocidex.com/golang/velociraptor/uploads"
 	"www.velocidex.com/golang/velociraptor/vql"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
@@ -32,6 +33,7 @@ type WebDAVUploadArgs struct {
 	BasicAuthPassword string            `vfilter:"optional,field=basic_auth_password,doc=The password to use in HTTP basic auth"`
 	NoVerifyCert      bool              `vfilter:"optional,field=noverifycert,doc=Skip TLS Verification (deprecated in favor of SkipVerify)"`
 	SkipVerify        bool              `vfilter:"optional,field=skip_verify,doc=Skip TLS Verification"`
+	UserAgent         string            `vfilter:"optional,field=user_agent,doc=If specified, set a HTTP User-Agent."`
 }
 
 type WebDAVUploadFunction struct{}
@@ -39,6 +41,7 @@ type WebDAVUploadFunction struct{}
 func (self *WebDAVUploadFunction) Call(ctx context.Context,
 	scope vfilter.Scope,
 	args *ordereddict.Dict) vfilter.Any {
+	defer vql_subsystem.RegisterMonitor("upload_webdav", args)()
 
 	arg := &WebDAVUploadArgs{}
 	err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
@@ -49,6 +52,10 @@ func (self *WebDAVUploadFunction) Call(ctx context.Context,
 
 	if arg.NoVerifyCert {
 		scope.Log("upload_webdav: NoVerifyCert is deprecated, please use SkipVerify instead")
+	}
+
+	if arg.UserAgent == "" {
+		arg.UserAgent = constants.USER_AGENT
 	}
 
 	err = vql_subsystem.CheckFilesystemAccess(scope, arg.Accessor)
@@ -90,7 +97,8 @@ func (self *WebDAVUploadFunction) Call(ctx context.Context,
 			arg.Url,
 			arg.BasicAuthUser,
 			arg.BasicAuthPassword,
-			arg.NoVerifyCert || arg.SkipVerify)
+			arg.NoVerifyCert || arg.SkipVerify,
+			arg.UserAgent)
 		if err != nil {
 			scope.Log("upload_webdav: %v", err)
 			return vfilter.Null{}
@@ -108,7 +116,8 @@ func upload_webdav(ctx context.Context, scope vfilter.Scope,
 	webdavUrl string,
 	basicAuthUser string,
 	basicAuthPassword string,
-	skipVerify bool) (
+	skipVerify bool,
+	userAgent string) (
 	*uploads.UploadResponse, error) {
 
 	scope.Log("upload_webdav: Uploading %v to %v", name, webdavUrl)
@@ -145,6 +154,7 @@ func upload_webdav(ctx context.Context, scope vfilter.Scope,
 		}, err
 	}
 
+	req.Header.Set("User-Agent", userAgent)
 	req.ContentLength = contentLength
 	req.SetBasicAuth(basicAuthUser, basicAuthPassword)
 

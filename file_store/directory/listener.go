@@ -67,6 +67,12 @@ type Listener struct {
 
 // Should not block - very fast.
 func (self *Listener) Send(item *ordereddict.Dict) {
+	defer utils.CheckForPanic("Listener.Send: %v", item)
+
+	if self.closed {
+		return
+	}
+
 	// This will block senders until we can send output
 	if atomic.LoadInt32(&self.disable_file_buffering) > 0 {
 		select {
@@ -195,6 +201,10 @@ func (self *Listener) Close() {
 	}
 }
 
+func (self *Listener) FileBufferSize() int64 {
+	return self.file_buffer.PendingSize()
+}
+
 func (self *Listener) Debug() *ordereddict.Dict {
 	self.mu.Lock()
 	defer self.mu.Unlock()
@@ -205,8 +215,14 @@ func (self *Listener) Debug() *ordereddict.Dict {
 		Set("file_buffer_active", self.file_buffer_active).
 		Set("closed", self.closed)
 
-	st, _ := os.Stat(self.tmpfile)
-	result.Set("Size", int64(st.Size()))
+	st, err := os.Stat(self.tmpfile)
+	if err == nil {
+		result.Set("Size", int64(st.Size()))
+	}
+
+	if self.file_buffer != nil {
+		result.Set("PendingSize", self.file_buffer.PendingSize())
+	}
 
 	return result
 }

@@ -1,6 +1,6 @@
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+   Copyright (C) 2019-2024 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -18,24 +18,7 @@
 
 // A Zip accessor.
 
-// This accessor provides access to compressed archives. The filename
-// is encoded in such a way that this accessor can delegate to another
-// accessor to actually open the underlying zip file. This makes it
-// possible to open zip files read through e.g. raw ntfs.
-
-// For example a filename is URL encoded as:
-// ntfs:/c:\\Windows\\File.zip#/foo/bar
-
-// Refers to the file opened by the accessor "ntfs" (The URL Scheme)
-// with a path (URL Path) of c:\\Windows\File.zip. We then open this
-// file and return a member called /foo/bar (The URL Fragment) within
-// the archive.
-
-// This scheme allows us to nest zip files if we need to:
-// zip://fs:%2Fc:%5Cfoo%5Cbar%23nested.zip#foo/bar
-
-// Refers to the file /foo/bar stored within a zip file nested.zip
-// which is itself stored on the filesystem at c:\foo\bar\nested.zip
+// This accessor provides access to compressed archives.
 
 package zip
 
@@ -312,6 +295,12 @@ func (self *ZipFileCache) Open(full_path *accessors.OSPath) (
 		return nil, err
 	}
 
+	// Disable stream authentication because the library unpacks the
+	// entire stream into memory to verify it. In practice, the
+	// embedded data.zip file provides sufficient authentication
+	// anyway. See https://github.com/Velocidex/velociraptor/issues/3150
+	info.member_file.DeferAuth = true
+
 	fd, err := info.member_file.Open()
 	if err == zip.ErrPassword {
 		password := self.maybeGetPassword()
@@ -472,14 +461,16 @@ func (self *ZipFileCache) Close() {
 	}
 }
 
-/* Zip members are normally compressed and therefore not seekable. If
-   we read the members sequentially (e.g. for yara scanning or other
-   sequential parsing), then there is no need to unpack the
-   file. However, if the callers need to seek within the archive
-   member we must unpack it to a tempfile.
+/*
+Zip members are normally compressed and therefore not seekable. If
 
-   This wrapper manages this by wrapping the underlying zip member and
-   unpacking to a tmpfile automatically depending on usage patterns.
+We read the members sequentially (e.g. for yara scanning or other
+sequential parsing), then there is no need to unpack the
+file. However, if the callers need to seek within the archive
+member we must unpack it to a tempfile.
+
+This wrapper manages this by wrapping the underlying zip member and
+unpacking to a tmpfile automatically depending on usage patterns.
 */
 type SeekableZip struct {
 	mu sync.Mutex
@@ -497,6 +488,10 @@ type SeekableZip struct {
 	tmp_file_backing *os.File
 
 	closed bool
+}
+
+func (self *SeekableZip) IsSeekable() bool {
+	return false
 }
 
 func (self *SeekableZip) Close() error {
@@ -643,9 +638,10 @@ and the Path representing the file within the zip file.
 Example:
 
        select FullPath, Mtime, Size from glob(
-         globs=pathspec(DelegateAccessor='file',
+         globs='/**/*.txt',
+         root=pathspec(DelegateAccessor='file',
               DelegatePath="File.zip",
-              Path='/**/*.txt'),
+              Path='/'),
          accessor='zip')
 
 `)

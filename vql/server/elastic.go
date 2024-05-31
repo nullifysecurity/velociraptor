@@ -14,7 +14,7 @@
 
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+   Copyright (C) 2019-2024 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -53,7 +53,10 @@ import (
 	"www.velocidex.com/golang/velociraptor/acls"
 	"www.velocidex.com/golang/velociraptor/artifacts"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
+	"www.velocidex.com/golang/velociraptor/constants"
 	"www.velocidex.com/golang/velociraptor/json"
+	"www.velocidex.com/golang/velociraptor/services"
+	"www.velocidex.com/golang/velociraptor/utils"
 	"www.velocidex.com/golang/velociraptor/vql"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/velociraptor/vql/networking"
@@ -78,6 +81,8 @@ type _ElasticPluginArgs struct {
 	SkipVerify         bool                `vfilter:"optional,field=skip_verify,doc=Disable ssl certificate verifications."`
 	RootCerts          string              `vfilter:"optional,field=root_ca,doc=As a better alternative to disable_ssl_security, allows root ca certs to be added here."`
 	MaxMemoryBuffer    uint64              `vfilter:"optional,field=max_memory_buffer,doc=How large we allow the memory buffer to grow to while we are trying to contact the Elastic server (default 100mb)."`
+	Action             string              `vfilter:"optional,field=action,doc=Either index or create. For data streams this must be create."`
+	Secret             string              `vfilter:"optional,field=secret,doc=Alternatively use a secret from the secrets service. Secret must be of type 'AWS S3 Creds'"`
 }
 
 type _ElasticPlugin struct{}
@@ -96,10 +101,26 @@ func (self _ElasticPlugin) Call(ctx context.Context,
 			return
 		}
 
-		arg := _ElasticPluginArgs{}
-		err = arg_parser.ExtractArgsWithContext(ctx, scope, args, &arg)
+		arg := &_ElasticPluginArgs{}
+		err = arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
 		if err != nil {
 			scope.Log("elastic: %v", err)
+			return
+		}
+
+		if arg.Secret != "" {
+			err := mergeSecretElastic(ctx, scope, arg)
+			if err != nil {
+				scope.Log("elastic_upload: %v", err)
+				return
+			}
+		}
+
+		if arg.Action == "" {
+			arg.Action = "index"
+		}
+		if arg.Action != "index" && arg.Action != "create" {
+			scope.Log("elastic: action must be either index or create")
 			return
 		}
 
@@ -127,7 +148,7 @@ func (self _ElasticPlugin) Call(ctx context.Context,
 
 			// Start an uploader on a thread.
 			go upload_rows(ctx, config_obj, scope, output_chan,
-				row_chan, id, &wg, &arg)
+				row_chan, id, arg.Action, &wg, arg)
 		}
 
 		wg.Wait()
@@ -141,7 +162,7 @@ func upload_rows(
 	config_obj *config_proto.ClientConfig,
 	scope vfilter.Scope, output_chan chan vfilter.Row,
 	row_chan <-chan vfilter.Row,
-	id int64,
+	id int64, action string,
 	wg *sync.WaitGroup,
 	arg *_ElasticPluginArgs) {
 	defer wg.Done()
@@ -185,7 +206,6 @@ func upload_rows(
 	}
 
 	wait_time := time.Duration(arg.WaitTime) * time.Second
-	next_send_id := id + arg.ChunkSize
 	next_send_time := time.After(wait_time)
 
 	// If the buffer is too large we need to drop the data on the
@@ -201,6 +221,8 @@ func upload_rows(
 
 	opts := vql_subsystem.EncOptsFromScope(scope)
 
+	count := int64(0)
+
 	// Batch sending to elastic: Either
 	// when we get to chuncksize or wait
 	// time whichever comes first.
@@ -211,27 +233,25 @@ func upload_rows(
 				return
 			}
 
-			// FIXME: Find a better way to interleave id's
-			// to avoid collisions.
-			id = id + 3
-			err := append_row_to_buffer(ctx, scope, row, id, &buf, arg, opts)
+			id = int64(utils.GetId())
+			err := append_row_to_buffer(ctx, scope, action, row, id, &buf, arg, opts)
 			if err != nil {
 				scope.Log("elastic: %v", err)
 				continue
 			}
 
-			if id > next_send_id ||
+			count++
+
+			if count > arg.ChunkSize ||
 				buf.Len() > int(max_buffer_size) {
-				send_to_elastic(ctx, scope, output_chan,
-					client, &buf)
-				next_send_id = id + arg.ChunkSize
+				send_to_elastic(ctx, scope, output_chan, client, &buf)
+				count = 0
 				next_send_time = time.After(wait_time)
 			}
 
 		case <-next_send_time:
-			send_to_elastic(ctx, scope, output_chan,
-				client, &buf)
-			next_send_id = id + arg.ChunkSize
+			send_to_elastic(ctx, scope, output_chan, client, &buf)
+			count = 0
 			next_send_time = time.After(wait_time)
 		}
 	}
@@ -240,6 +260,7 @@ func upload_rows(
 func append_row_to_buffer(
 	ctx context.Context,
 	scope vfilter.Scope,
+	action string,
 	row vfilter.Row, id int64, buf *bytes.Buffer,
 	arg *_ElasticPluginArgs, opts *json.EncOpts) error {
 
@@ -255,11 +276,11 @@ func append_row_to_buffer(
 	var meta []byte
 	pipeline := arg.PipeLine
 	if pipeline != "" {
-		meta = []byte(fmt.Sprintf(`{ "index" : {"_id" : "%d", "_index": "%s", "pipeline": "%s" } }%s`,
-			id, index, pipeline, "\n"))
+		meta = []byte(fmt.Sprintf(`{ %q : {"_id" : "%d", "_index": %q, "pipeline": %q } }%s`,
+			action, id, index, pipeline, "\n"))
 	} else {
-		meta = []byte(fmt.Sprintf(`{ "index" : {"_id" : "%d", "_index": "%s"} }%s`,
-			id, index, "\n"))
+		meta = []byte(fmt.Sprintf(`{ %q : {"_id" : "%d", "_index": %q} }%s`,
+			action, id, index, "\n"))
 	}
 
 	data, err := json.MarshalWithOptions(row_dict, opts)
@@ -321,6 +342,64 @@ var sanitize_index_re = regexp.MustCompile("[^a-zA-Z0-9]")
 func sanitize_index(name string) string {
 	return sanitize_index_re.ReplaceAllLiteralString(
 		strings.ToLower(name), "_")
+}
+
+func mergeSecretElastic(ctx context.Context, scope vfilter.Scope, arg *_ElasticPluginArgs) error {
+	config_obj, ok := vql_subsystem.GetServerConfig(scope)
+	if !ok {
+		return errors.New("elastic_upload: Secrets may only be used on the server")
+	}
+
+	secrets_service, err := services.GetSecretsService(config_obj)
+	if err != nil {
+		return err
+	}
+
+	principal := vql_subsystem.GetPrincipal(scope)
+
+	secret_record, err := secrets_service.GetSecret(ctx, principal,
+		constants.ELASTIC_CREDS, arg.Secret)
+	if err != nil {
+		return err
+	}
+
+	get := func(field string) string {
+		return vql_subsystem.GetStringFromRow(
+			scope, secret_record.Data, field)
+	}
+
+	get_bool := func(field string) bool {
+		return vql_subsystem.GetBoolFromString(vql_subsystem.GetStringFromRow(
+			scope, secret_record.Data, field))
+	}
+
+	addresses := vql_subsystem.GetStringFromRow(
+		scope, secret_record.Data, "addresses")
+	arg.Addresses = nil
+	for _, line := range strings.Split(addresses, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		arg.Addresses = append(arg.Addresses, line)
+	}
+
+	if arg.Addresses == nil {
+		return errors.New("No addresses present in elastic secret!")
+	}
+
+	arg.Index = get("index")
+	arg.Type = get("type")
+	arg.Username = get("username")
+	arg.Password = get("password")
+	arg.CloudID = get("cloud_id")
+	arg.APIKey = get("api_key")
+	arg.PipeLine = get("pipeline")
+	arg.SkipVerify = get_bool("skip_verify")
+	arg.RootCerts = get("root_ca")
+	arg.Action = get("action")
+
+	return nil
 }
 
 func (self _ElasticPlugin) Info(

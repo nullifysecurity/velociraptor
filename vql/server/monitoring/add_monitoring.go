@@ -10,6 +10,7 @@ import (
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/vql"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
+	vql_utils "www.velocidex.com/golang/velociraptor/vql/utils"
 	"www.velocidex.com/golang/vfilter"
 	"www.velocidex.com/golang/vfilter/arg_parser"
 )
@@ -42,18 +43,12 @@ func (self AddClientMonitoringFunction) Call(
 
 	config_obj, ok := vql_subsystem.GetServerConfig(scope)
 	if !ok {
-		scope.Log("Command can only run on the server")
+		scope.Log("add_client_monitoring: Command can only run on the server")
 		return vfilter.Null{}
 	}
 
 	// Now verify the artifact actually exists
-	manager, err := services.GetRepositoryManager(config_obj)
-	if err != nil {
-		scope.Log("add_client_monitoring: %v", err)
-		return vfilter.Null{}
-	}
-
-	repository, err := manager.GetGlobalRepository(config_obj)
+	repository, err := vql_utils.GetRepository(scope)
 	if err != nil {
 		scope.Log("add_client_monitoring: %v", err)
 		return vfilter.Null{}
@@ -206,18 +201,12 @@ func (self AddServerMonitoringFunction) Call(
 
 	config_obj, ok := vql_subsystem.GetServerConfig(scope)
 	if !ok {
-		scope.Log("Command can only run on the server")
+		scope.Log("add_server_monitoring: Command can only run on the server")
 		return vfilter.Null{}
 	}
 
 	// Now verify the artifact actually exists
-	manager, err := services.GetRepositoryManager(config_obj)
-	if err != nil {
-		scope.Log("add_server_monitoring: %v", err)
-		return vfilter.Null{}
-	}
-
-	repository, err := manager.GetGlobalRepository(config_obj)
+	repository, err := vql_utils.GetRepository(scope)
 	if err != nil {
 		scope.Log("add_server_monitoring: %v", err)
 		return vfilter.Null{}

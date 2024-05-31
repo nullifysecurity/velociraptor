@@ -33,9 +33,17 @@ func (self ReadSeekReaderAdapter) Close() error {
 }
 
 func (self *ReadSeekReaderAdapter) Read(buf []byte) (int, error) {
+	if self.offset < 0 {
+		return 0, IOError
+	}
+
 	n, err := self.reader.ReadAt(buf, self.offset)
 	self.offset += int64(n)
 	return n, err
+}
+
+func (self *ReadSeekReaderAdapter) IsSeekable() bool {
+	return true
 }
 
 func (self *ReadSeekReaderAdapter) Seek(offset int64, whence int) (int64, error) {

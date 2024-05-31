@@ -1,3 +1,4 @@
+//go:build !aix
 // +build !aix
 
 package main
@@ -50,6 +51,12 @@ What OS will the server be deployed on?
 		Options: []string{"linux", "windows", "darwin"},
 	}
 
+	dyndns_provider_quetion = &survey.Select{
+		Message: `Which DynDns provider do you use?`,
+		Default: "none",
+		Options: []string{"none", "noip", "cloudflare"},
+	}
+
 	url_question = &survey.Input{
 		Message: "What is the public DNS name of the Master Frontend " +
 			"(e.g. www.example.com):",
@@ -59,12 +66,22 @@ What OS will the server be deployed on?
 	}
 
 	// https://docs.microsoft.com/en-us/troubleshoot/windows-server/identity/naming-conventions-for-computer-domain-site-ou#dns-host-names
-	url_validator = regexValidator("^[a-z0-9.A-Z\\-]+$")
-	port_question = &survey.Input{
+	url_validator          = regexValidator("^[a-z0-9.A-Z\\-]+$")
+	frontend_port_question = &survey.Input{
 		Message: "Enter the frontend port to listen on.",
 		Default: "8000",
 	}
 	port_validator = regexValidator("^[0-9]+$")
+
+	should_use_websocket = false
+	websocket_question   = &survey.Confirm{
+		Message: `Would you like to try the new experimental websocket comms?
+
+Websocket is a bidirectional low latency communication protocol supported by
+most modern proxies and load balancers. This method is more efficient and
+portable than plain HTTP. Be sure to test this in you environment.
+`,
+	}
 
 	gui_port_question = &survey.Input{
 		Message: "Enter the port for the GUI to listen on.",
@@ -108,20 +125,19 @@ What OS will the server be deployed on?
 		},
 	}
 
-	google_domains_username = &survey.Input{
-		Message: "Google Domains DynDNS Username",
-	}
-
-	google_domains_password = &survey.Input{
-		Message: "Google Domains DynDNS Password",
-	}
-
 	add_allow_list_question = &survey.Confirm{
 		Message: `Do you want to restrict VQL functionality on the server?
 
 This is useful for a shared server where users are not fully trusted.
-It removes potentially dangerous plugins like execve(),filesystem access etc.
+It removes potentially dangerous plugins like execve(), filesystem access etc.
+
+NOTE: This is an experimental feature only useful in limited situations. If you
+do not know you need it select N here!
 `,
+	}
+
+	registry_writeback_question = &survey.Confirm{
+		Message: `Would you like to use the registry to store the writeback files? (Experimental)`,
 	}
 )
 
@@ -214,6 +230,20 @@ func configureDeploymentType(config_obj *config_proto.Config) error {
 			return err
 		}
 	}
+
+	return nil
+}
+
+func configureRegistryWriteback(config_obj *config_proto.Config) error {
+	use_registry := false
+	err := survey.AskOne(registry_writeback_question, &use_registry, nil)
+	if err != nil {
+		return err
+	}
+
+	if use_registry {
+		config_obj.Client.WritebackWindows = "HKLM\\SOFTWARE\\Velocidex\\Velociraptor"
+	}
 	return nil
 }
 
@@ -232,6 +262,7 @@ func doGenerateConfigInteractive() error {
 
 	configureDataStore(config_obj)
 	configureDeploymentType(config_obj)
+	configureRegistryWriteback(config_obj)
 
 	// The API's public DNS name allows external callers but by
 	// default we bind to loopback only.
@@ -411,26 +442,46 @@ func configureSSO(config_obj *config_proto.Config) error {
 }
 
 func dynDNSConfig(frontend *config_proto.FrontendConfig) error {
-	dyndns := false
-	err := survey.AskOne(&survey.Confirm{
-		Message: "Are you using Google Domains DynDNS?"},
+	dyndns := ""
+	err := survey.AskOne(dyndns_provider_quetion,
 		&dyndns, survey.WithValidator(survey.Required))
 	if err != nil {
 		return err
 	}
 
-	if !dyndns {
+	switch dyndns {
+	case "none":
 		return nil
-	}
 
-	if frontend.DynDns == nil {
-		frontend.DynDns = &config_proto.DynDNSConfig{}
-	}
+	case "noip":
+		if frontend.DynDns == nil {
+			frontend.DynDns = &config_proto.DynDNSConfig{
+				Type: "noip",
+			}
+		}
 
-	return survey.Ask([]*survey.Question{
-		{Name: "DdnsUsername", Prompt: google_domains_username},
-		{Name: "DdnsPassword", Prompt: google_domains_password},
-	}, frontend.DynDns, survey.WithValidator(survey.Required))
+		return survey.Ask([]*survey.Question{
+			{Name: "DdnsUsername", Prompt: &survey.Input{
+				Message: "NoIP DynDNS Username"}},
+			{Name: "DdnsPassword", Prompt: &survey.Input{
+				Message: "NoIP DynDNS Password"}},
+		}, frontend.DynDns, survey.WithValidator(survey.Required))
+
+	case "cloudflare":
+		if frontend.DynDns == nil {
+			frontend.DynDns = &config_proto.DynDNSConfig{
+				Type: "cloudflare",
+			}
+		}
+
+		return survey.Ask([]*survey.Question{
+			{Name: "ZoneName", Prompt: &survey.Input{
+				Message: "Cloudflare Zone Name"}},
+			{Name: "ApiToken", Prompt: &survey.Input{
+				Message: "Cloudflare API Token"}},
+		}, frontend.DynDns, survey.WithValidator(survey.Required))
+	}
+	return nil
 }
 
 func configSelfSigned(config_obj *config_proto.Config) error {
@@ -442,11 +493,10 @@ func configSelfSigned(config_obj *config_proto.Config) error {
 		},
 		{
 			Name:     "BindPort",
-			Prompt:   port_question,
+			Prompt:   frontend_port_question,
 			Validate: port_validator,
 		},
 	}, config_obj.Frontend)
-
 	if err != nil {
 		return err
 	}
@@ -462,6 +512,16 @@ func configSelfSigned(config_obj *config_proto.Config) error {
 		return err
 	}
 
+	err = survey.AskOne(websocket_question, &should_use_websocket, nil)
+	if err != nil {
+		return err
+	}
+
+	protocol := "https"
+	if should_use_websocket {
+		protocol = "wss"
+	}
+
 	config_obj.GUI.PublicUrl = fmt.Sprintf(
 		"https://%s:%d/", config_obj.Frontend.Hostname,
 		config_obj.GUI.BindPort)
@@ -469,7 +529,7 @@ func configSelfSigned(config_obj *config_proto.Config) error {
 	config_obj.Client.UseSelfSignedSsl = true
 	config_obj.Client.ServerUrls = append(
 		config_obj.Client.ServerUrls,
-		fmt.Sprintf("https://%s:%d/", config_obj.Frontend.Hostname,
+		fmt.Sprintf("%s://%s:%d/", protocol, config_obj.Frontend.Hostname,
 			config_obj.Frontend.BindPort))
 
 	config_obj.GUI.Authenticator = &config_proto.Authenticator{
@@ -485,6 +545,11 @@ func configAutocert(config_obj *config_proto.Config) error {
 		Prompt:   url_question,
 	},
 	}, config_obj.Frontend)
+	if err != nil {
+		return err
+	}
+
+	err = survey.AskOne(websocket_question, &should_use_websocket, nil)
 	if err != nil {
 		return err
 	}

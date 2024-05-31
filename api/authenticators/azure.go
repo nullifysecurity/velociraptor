@@ -1,6 +1,6 @@
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+   Copyright (C) 2019-2024 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -65,11 +65,11 @@ func (self *AzureAuthenticator) AuthRedirectTemplate() string {
 
 func (self *AzureAuthenticator) AddHandlers(mux *http.ServeMux) error {
 	mux.Handle(utils.Join(self.base, "/auth/azure/login"),
-		self.oauthAzureLogin())
+		IpFilter(self.config_obj, self.oauthAzureLogin()))
 	mux.Handle(utils.Join(self.base, "/auth/azure/callback"),
-		self.oauthAzureCallback())
+		IpFilter(self.config_obj, self.oauthAzureCallback()))
 	mux.Handle(utils.Join(self.base, "/auth/azure/picture"),
-		self.oauthAzurePicture())
+		IpFilter(self.config_obj, self.oauthAzurePicture()))
 	return nil
 }
 

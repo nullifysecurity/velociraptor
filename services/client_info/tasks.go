@@ -8,6 +8,7 @@ package client_info
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 
 	"github.com/Velocidex/ordereddict"
@@ -40,41 +41,26 @@ var (
 	})
 )
 
-type TASKS_AVAILABLE_STATUS int
-
-const (
-	// We dont know the client has any tasks or not - we need to check
-	// the datastore.
-	TASKS_AVAILABLE_STATUS_UNKNOWN TASKS_AVAILABLE_STATUS = iota
-
-	// Client definitely has tasks - we will check the datastore when
-	// we need them.
-	TASKS_AVAILABLE_STATUS_YES
-
-	// Client definitely does not have tasks. The master will inform
-	// us when new tasks are added to it, until then we do not check
-	// the datastore at all.
-	TASKS_AVAILABLE_STATUS_NO
-)
-
 func (self *ClientInfoManager) ProcessNotification(
 	ctx context.Context, config_obj *config_proto.Config,
 	row *ordereddict.Dict) error {
 	client_id, pres := row.GetString("ClientId")
 	if pres {
-		cached_info, err := self.GetCacheInfo(client_id)
-		if err != nil {
-			// There is no client record - this is not an error as a
-			// client record may not exist yet
-			return nil
-		}
+		err := self.storage.Modify(ctx, client_id,
+			func(client_info *services.ClientInfo) (*services.ClientInfo, error) {
+				if client_info == nil {
+					return nil, utils.NotFoundError
+				}
+				client_info.HasTasks = true
+				return client_info, nil
+			})
 
-		// Next access will check for real.
-		tasksClearCount.Inc()
-		cached_info.SetHasTasks(TASKS_AVAILABLE_STATUS_YES)
-
-		notifier, err := services.GetNotifier(config_obj)
+		// If a record does not exist we ignore the notification.
 		if err == nil {
+			notifier, err := services.GetNotifier(config_obj)
+			if err != nil {
+				return err
+			}
 			notifier.NotifyDirectListener(client_id)
 		}
 	}
@@ -112,13 +98,27 @@ func (self *ClientInfoManager) QueueMessagesForClient(
 	}
 
 	// When the completer is done send a message to all the minions
-	// that the tasks are ready to be read.
+	// that the tasks are ready to be read. This will cause all nodes
+	// to update the client record's has_tasks field. On the master
+	// node this information will be flushed on the next snapshot
+	// write.
 	completer := utils.NewCompleter(func() {
-		journal.PushRowsToArtifactAsync(ctx, self.config_obj,
-			ordereddict.NewDict().
-				Set("ClientId", client_id).
-				Set("Notify", notify),
-			"Server.Internal.ClientTasks")
+		err := self.storage.Modify(ctx, client_id,
+			func(client_info *services.ClientInfo) (*services.ClientInfo, error) {
+				if client_info == nil {
+					return nil, utils.NotFoundError
+				}
+				client_info.HasTasks = true
+				return client_info, nil
+			})
+
+		if err == nil {
+			journal.PushRowsToArtifactAsync(ctx, self.config_obj,
+				ordereddict.NewDict().
+					Set("ClientId", client_id).
+					Set("Notify", notify),
+				"Server.Internal.ClientTasks")
+		}
 	})
 	defer completer.GetCompletionFunc()()
 
@@ -171,6 +171,8 @@ func (self *ClientInfoManager) QueueMessageForClient(
 				completion()
 			}
 
+			// This message will be received by all nodes and cause
+			// the client's recrod to update the has_tasks field.
 			journal.PushRowsToArtifactAsync(ctx, self.config_obj,
 				ordereddict.NewDict().
 					Set("ClientId", client_id).
@@ -183,6 +185,18 @@ func (self *ClientInfoManager) QueueMessageForClient(
 // by tests).
 func (self *ClientInfoManager) PeekClientTasks(ctx context.Context,
 	client_id string) ([]*crypto_proto.VeloMessage, error) {
+
+	record, err := self.storage.GetRecord(client_id)
+	if err != nil {
+		// Not an error if the client does not exist.
+		return nil, nil
+	}
+
+	// This is by far the most common case - we know the client has no
+	// tasks outstanding. We can return immediately without any IO
+	if !record.HasTasks {
+		return nil, nil
+	}
 
 	db, err := datastore.GetDB(self.config_obj)
 	if err != nil {
@@ -199,8 +213,6 @@ func (self *ClientInfoManager) PeekClientTasks(ctx context.Context,
 	for _, task_urn := range tasks {
 		task_urn = task_urn.SetTag("ClientTask")
 
-		// Here we read the task from the task_urn and remove
-		// it from the queue.
 		message := &crypto_proto.VeloMessage{}
 		err = db.GetSubject(self.config_obj, task_urn, message)
 		if err != nil {
@@ -212,62 +224,52 @@ func (self *ClientInfoManager) PeekClientTasks(ctx context.Context,
 	return result, nil
 }
 
+var (
+	noTasksError = errors.New("No Tasks")
+)
+
+// Gets all the tasks from the client and remove from the datastore.
 func (self *ClientInfoManager) GetClientTasks(
 	ctx context.Context, client_id string) (
 	[]*crypto_proto.VeloMessage, error) {
-	cached_info, err := self.GetCacheInfo(client_id)
-	if err != nil {
+
+	err := self.storage.Modify(ctx, client_id,
+		func(client_info *services.ClientInfo) (*services.ClientInfo, error) {
+			if client_info == nil {
+				return nil, utils.NotFoundError
+			}
+			if !client_info.HasTasks {
+				return nil, noTasksError
+			}
+			// Reset the HasTasks flag
+			client_info.HasTasks = false
+			return client_info, nil
+		})
+
+	if err == utils.NotFoundError {
+		// Not an error if the client does not exist.
 		return nil, nil
 	}
 
 	// This is by far the most common case - we know the client has no
 	// tasks outstanding. We can return immediately without any IO
-	if cached_info.GetHasTasks() == TASKS_AVAILABLE_STATUS_NO {
+	if err == noTasksError {
 		return nil, nil
 	}
 
 	var tasks []api.DSPathSpec
 
-	// We really do not know - lets check
-	if cached_info.GetHasTasks() == TASKS_AVAILABLE_STATUS_UNKNOWN {
-		db, err := datastore.GetDB(self.config_obj)
-		if err != nil {
-			return nil, err
-		}
-
-		client_path_manager := paths.NewClientPathManager(client_id)
-		tasks, err = db.ListChildren(
-			self.config_obj, client_path_manager.TasksDirectory())
-		if err != nil {
-			return nil, err
-		}
-
-		if len(tasks) > 0 {
-			cached_info.SetHasTasks(TASKS_AVAILABLE_STATUS_YES)
-
-		} else {
-			// No tasks available.
-			cached_info.SetHasTasks(TASKS_AVAILABLE_STATUS_NO)
-			return nil, nil
-		}
-	}
-
-	// From here on we have TASKS_AVAILABLE_STATUS_YES
-
+	// Fetch all the tasks.
 	db, err := datastore.GetDB(self.config_obj)
 	if err != nil {
 		return nil, err
 	}
 
-	// We know that there are tasks available but we dont have them,
-	// let's get them.
-	if len(tasks) == 0 {
-		client_path_manager := paths.NewClientPathManager(client_id)
-		tasks, err = db.ListChildren(
-			self.config_obj, client_path_manager.TasksDirectory())
-		if err != nil {
-			return nil, err
-		}
+	client_path_manager := paths.NewClientPathManager(client_id)
+	tasks, err = db.ListChildren(
+		self.config_obj, client_path_manager.TasksDirectory())
+	if err != nil {
+		return nil, err
 	}
 
 	result := []*crypto_proto.VeloMessage{}
@@ -319,9 +321,6 @@ func (self *ClientInfoManager) GetClientTasks(
 
 		result = append(result, message)
 	}
-
-	// No more tasks available.
-	cached_info.SetHasTasks(TASKS_AVAILABLE_STATUS_NO)
 
 	return result, nil
 }

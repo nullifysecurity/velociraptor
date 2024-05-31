@@ -2,7 +2,7 @@
 
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+   Copyright (C) 2019-2024 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -50,9 +50,9 @@ var (
 		"config_file", "The filename to write into the binary.").
 		Required().File()
 
-	repack_command_append = repack_command.Flag(
-		"append", "If provided we append the file to the output binary.").
-		File()
+	repack_command_binaries = repack_command.Flag(
+		"binaries", "The list of tool names to append to the binary.").
+		Strings()
 
 	repack_command_output = repack_command.Arg(
 		"output", "The filename to write the repacked binary.").
@@ -91,10 +91,26 @@ func doRepack() error {
 	}
 
 	config_obj := &config_proto.Config{}
+	if isConfigSpecified(os.Args) {
+		config_obj, err = APIConfigLoader.WithNullLoader().
+			LoadAndValidate()
+		if err != nil {
+			return err
+		}
+		config_obj.Services = services.GenericToolServices()
+		if config_obj.Datastore != nil && config_obj.Datastore.Location != "" {
+			config_obj.Services.IndexServer = true
+			config_obj.Services.ClientInfo = true
+			config_obj.Services.Label = true
+		}
+
+	} else {
+		config_obj.Services = services.GenericToolServices()
+	}
+
 	ctx, cancel := install_sig_handler()
 	defer cancel()
 
-	config_obj.Services = services.GenericToolServices()
 	sm, err := startup.StartToolServices(ctx, config_obj)
 	defer sm.Close()
 
@@ -106,16 +122,18 @@ func doRepack() error {
 	if err != nil {
 		return err
 	}
+	logger := &StdoutLogWriter{}
 	builder := services.ScopeBuilder{
 		Config:     sm.Config,
 		ACLManager: acl_managers.NewRoleACLManager(sm.Config, "administrator"),
 		Uploader: &uploads.FileBasedUploader{
 			UploadDir: filepath.Dir(output_path),
 		},
-		Logger: log.New(&StdoutLogWriter{}, "", 0),
+		Logger: log.New(logger, "", 0),
 		Env: ordereddict.NewDict().
 			Set("ConfigData", config_data).
 			Set("Exe", executable).
+			Set("Binaries", *repack_command_binaries).
 			Set("UploadName", filepath.Base(output_path)),
 	}
 
@@ -124,6 +142,17 @@ func doRepack() error {
           config=ConfigData, upload_name=UploadName) AS RepackInfo
        FROM scope()
 `
+
+	// Repacking binaries requires a working inventory service -
+	// therefore a server config.
+	if len(*repack_command_binaries) > 0 {
+		query = `
+       SELECT repack(exe=Exe, accessor="file", binaries=Binaries,
+          config=ConfigData, upload_name=UploadName) AS RepackInfo
+       FROM scope()
+`
+	}
+
 	manager, err := services.GetRepositoryManager(config_obj)
 	if err != nil {
 		return err
@@ -144,7 +173,7 @@ func doRepack() error {
 		}
 	}
 
-	return nil
+	return logger.Error
 }
 
 func init() {

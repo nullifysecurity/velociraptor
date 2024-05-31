@@ -44,7 +44,7 @@ func (self DeleteFlowPlugin) Call(
 
 		config_obj, ok := vql_subsystem.GetServerConfig(scope)
 		if !ok {
-			scope.Log("Command can only run on the server")
+			scope.Log("delete_flow: Command can only run on the server")
 			return
 		}
 
@@ -78,7 +78,7 @@ func (self DeleteFlowPlugin) Info(scope vfilter.Scope, type_map *vfilter.TypeMap
 	return &vfilter.PluginInfo{
 		Name:     "delete_flow",
 		Doc:      "Delete all the files that make up a flow.",
-		ArgType:  type_map.AddType(scope, &FlowsPluginArgs{}),
+		ArgType:  type_map.AddType(scope, &DeleteFlowPluginArgs{}),
 		Metadata: vql.VQLMetadata().Permissions(acls.DELETE_RESULTS).Build(),
 	}
 }

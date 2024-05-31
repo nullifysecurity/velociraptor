@@ -47,41 +47,6 @@ SELECT * FROM parse_evtx(filename=srcDir + '/artifacts/testdata/files/Security_1
    }
   }
  }
-]SELECT * FROM Artifact.Windows.EventLogs.Kerbroasting(EvtxGlob=srcDir + '/artifacts/testdata/files/EID4769_Kerbroasting.evtx')[
- {
-  "EventTime": "2019-09-30T01:58:40Z",
-  "EventID": 4769,
-  "Computer": "DC2016.dfir.lab",
-  "ServiceName": "SVC-APP03",
-  "ServiceSid": "S-1-5-21-3673242659-2809345135-1169127309-1110",
-  "TargetUserName": "matt@DFIR.LAB",
-  "Status": "0x0",
-  "TargetDomainName": "DFIR.LAB",
-  "TicketEncryptionType": "0x17",
-  "TicketOptions": "0x40810010",
-  "TransmittedServices": "-",
-  "IpAddress": "::ffff:192.168.63.1",
-  "IpPort": "52562",
-  "FullPath": "X:\\artifacts\\testdata\\files\\EID4769_Kerbroasting.evtx",
-  "_Source": "Windows.EventLogs.Kerbroasting"
- },
- {
-  "EventTime": "2019-09-30T01:58:40Z",
-  "EventID": 4769,
-  "Computer": "DC2016.dfir.lab",
-  "ServiceName": "SVC-SQL02",
-  "ServiceSid": "S-1-5-21-3673242659-2809345135-1169127309-1109",
-  "TargetUserName": "matt@DFIR.LAB",
-  "Status": "0x0",
-  "TargetDomainName": "DFIR.LAB",
-  "TicketEncryptionType": "0x17",
-  "TicketOptions": "0x40810010",
-  "TransmittedServices": "-",
-  "IpAddress": "::ffff:192.168.63.1",
-  "IpPort": "52564",
-  "FullPath": "X:\\artifacts\\testdata\\files\\EID4769_Kerbroasting.evtx",
-  "_Source": "Windows.EventLogs.Kerbroasting"
- }
 ]SELECT * FROM Artifact.Windows.EventLogs.PowershellScriptblock(EvtxGlob=srcDir + "/artifacts/testdata/files/EID4104_PowershellScriptblock.evtx", LogLevel="All")[
  {
   "EventTime": "2019-12-02T11:39:33Z",
@@ -97,7 +62,7 @@ SELECT * FROM parse_evtx(filename=srcDir + '/artifacts/testdata/files/Security_1
   "Level": 5,
   "Opcode": 15,
   "Task": 2,
-  "FullPath": "X:\\artifacts\\testdata\\files\\EID4104_PowershellScriptblock.evtx",
+  "OSPath": "X:\\artifacts\\testdata\\files\\EID4104_PowershellScriptblock.evtx",
   "_Source": "Windows.EventLogs.PowershellScriptblock"
  },
  {
@@ -114,7 +79,7 @@ SELECT * FROM parse_evtx(filename=srcDir + '/artifacts/testdata/files/Security_1
   "Level": 5,
   "Opcode": 15,
   "Task": 2,
-  "FullPath": "X:\\artifacts\\testdata\\files\\EID4104_PowershellScriptblock.evtx",
+  "OSPath": "X:\\artifacts\\testdata\\files\\EID4104_PowershellScriptblock.evtx",
   "_Source": "Windows.EventLogs.PowershellScriptblock"
  }
 ]SELECT * FROM Artifact.Windows.EventLogs.PowershellModule(EventLog=srcDir + "/artifacts/testdata/files/EID4103_PowershellModule.evtx" )[
@@ -146,7 +111,7 @@ SELECT * FROM parse_evtx(filename=srcDir + '/artifacts/testdata/files/Security_1
   "EventID": 4104,
   "EventRecordID": 4092,
   "UserSID": "S-1-5-21-2201333269-445358460-1233016754-1000",
-  "Username": null,
+  "Username": "S-1-5-21-2201333269-445358460-1233016754-1000",
   "EventData": {
    "MessageNumber": 1,
    "MessageTotal": 1,
@@ -156,7 +121,7 @@ SELECT * FROM parse_evtx(filename=srcDir + '/artifacts/testdata/files/Security_1
   },
   "UserData": null,
   "Message": "Creating Scriptblock text (1 of 1):\nGet-Service | select *\n\nScriptBlock ID: c434040f-afc8-4754-8d7e-b041dd6ad509\nPath: \r\n",
-  "FullPath": "X:\\artifacts\\testdata\\files\\EID4104_PowershellScriptblock.evtx",
+  "OSPath": "X:\\artifacts\\testdata\\files\\EID4104_PowershellScriptblock.evtx",
   "_Source": "Windows.EventLogs.EvtxHunter"
  }
 ]SELECT * FROM Artifact.Windows.EventLogs.ScheduledTasks( Security=srcDir + '/artifacts/testdata/files/SecurityTasks.evtx', TaskScheduler= srcDir + '/artifacts/testdata/files/TaskScheduler.evtx', TaskNameRegex='T1053_005_powershell' )[
@@ -230,7 +195,7 @@ SELECT * FROM parse_evtx(filename=srcDir + '/artifacts/testdata/files/Security_1
    "RpcCallClientLocality": 0,
    "FQDN": "RE-Dev"
   },
-  "FullPath": "X:\\artifacts\\testdata\\files\\SecurityTasks.evtx",
+  "OSPath": "X:\\artifacts\\testdata\\files\\SecurityTasks.evtx",
   "_Source": "Windows.EventLogs.ScheduledTasks"
  },
  {
@@ -256,7 +221,7 @@ SELECT * FROM parse_evtx(filename=srcDir + '/artifacts/testdata/files/Security_1
    "RpcCallClientLocality": 0,
    "FQDN": "RE-Dev"
   },
-  "FullPath": "X:\\artifacts\\testdata\\files\\SecurityTasks.evtx",
+  "OSPath": "X:\\artifacts\\testdata\\files\\SecurityTasks.evtx",
   "_Source": "Windows.EventLogs.ScheduledTasks"
  },
  {
@@ -273,7 +238,7 @@ SELECT * FROM parse_evtx(filename=srcDir + '/artifacts/testdata/files/Security_1
    "TaskName": "\\T1053_005_powershell",
    "UserContext": "RE-DEV\\yolo"
   },
-  "FullPath": "X:\\artifacts\\testdata\\files\\TaskScheduler.evtx",
+  "OSPath": "X:\\artifacts\\testdata\\files\\TaskScheduler.evtx",
   "_Source": "Windows.EventLogs.ScheduledTasks"
  },
  {
@@ -292,7 +257,7 @@ SELECT * FROM parse_evtx(filename=srcDir + '/artifacts/testdata/files/Security_1
    "ProcessID": 6632,
    "Priority": 16384
   },
-  "FullPath": "X:\\artifacts\\testdata\\files\\TaskScheduler.evtx",
+  "OSPath": "X:\\artifacts\\testdata\\files\\TaskScheduler.evtx",
   "_Source": "Windows.EventLogs.ScheduledTasks"
  },
  {
@@ -310,7 +275,7 @@ SELECT * FROM parse_evtx(filename=srcDir + '/artifacts/testdata/files/Security_1
    "UserContext": "RE-DEV\\yolo",
    "InstanceId": "C3B3FB39-EE3C-4784-B325-D4B5A8787155"
   },
-  "FullPath": "X:\\artifacts\\testdata\\files\\TaskScheduler.evtx",
+  "OSPath": "X:\\artifacts\\testdata\\files\\TaskScheduler.evtx",
   "_Source": "Windows.EventLogs.ScheduledTasks"
  },
  {
@@ -329,7 +294,7 @@ SELECT * FROM parse_evtx(filename=srcDir + '/artifacts/testdata/files/Security_1
    "TaskInstanceId": "C3B3FB39-EE3C-4784-B325-D4B5A8787155",
    "EnginePID": 6632
   },
-  "FullPath": "X:\\artifacts\\testdata\\files\\TaskScheduler.evtx",
+  "OSPath": "X:\\artifacts\\testdata\\files\\TaskScheduler.evtx",
   "_Source": "Windows.EventLogs.ScheduledTasks"
  },
  {
@@ -347,7 +312,7 @@ SELECT * FROM parse_evtx(filename=srcDir + '/artifacts/testdata/files/Security_1
    "InstanceId": "5598D79C-1A6E-4922-ADF6-304C33D70505",
    "UserContext": "Administrators"
   },
-  "FullPath": "X:\\artifacts\\testdata\\files\\TaskScheduler.evtx",
+  "OSPath": "X:\\artifacts\\testdata\\files\\TaskScheduler.evtx",
   "_Source": "Windows.EventLogs.ScheduledTasks"
  },
  {
@@ -367,7 +332,7 @@ SELECT * FROM parse_evtx(filename=srcDir + '/artifacts/testdata/files/Security_1
    "ResultCode": 0,
    "EnginePID": 6632
   },
-  "FullPath": "X:\\artifacts\\testdata\\files\\TaskScheduler.evtx",
+  "OSPath": "X:\\artifacts\\testdata\\files\\TaskScheduler.evtx",
   "_Source": "Windows.EventLogs.ScheduledTasks"
  },
  {
@@ -385,7 +350,7 @@ SELECT * FROM parse_evtx(filename=srcDir + '/artifacts/testdata/files/Security_1
    "UserContext": "RE-DEV\\yolo",
    "InstanceId": "C3B3FB39-EE3C-4784-B325-D4B5A8787155"
   },
-  "FullPath": "X:\\artifacts\\testdata\\files\\TaskScheduler.evtx",
+  "OSPath": "X:\\artifacts\\testdata\\files\\TaskScheduler.evtx",
   "_Source": "Windows.EventLogs.ScheduledTasks"
  },
  {
@@ -402,7 +367,7 @@ SELECT * FROM parse_evtx(filename=srcDir + '/artifacts/testdata/files/Security_1
    "TaskName": "\\T1053_005_powershell",
    "UserName": "RE-DEV\\yolo"
   },
-  "FullPath": "X:\\artifacts\\testdata\\files\\TaskScheduler.evtx",
+  "OSPath": "X:\\artifacts\\testdata\\files\\TaskScheduler.evtx",
   "_Source": "Windows.EventLogs.ScheduledTasks"
  }
 ]SELECT EventID, DomainName, UserName, LogonType, SourceIP, Description FROM Artifact.Windows.EventLogs.RDPAuth( Security=srcDir + '/artifacts/testdata/files/RDPAuth_Security.evtx', System= srcDir + '/artifacts/testdata/files/RDPAuth_System.evtx', LocalSessionManager= srcDir + '/artifacts/testdata/files/RDPAuth_LocalSessionManager.evtx', RemoteConnectionManager= srcDir + '/artifacts/testdata/files/RDPAuth_RemoteConnectionManager.evtx') WHERE NOT LogonType = 3 GROUP BY EventID[
@@ -486,15 +451,13 @@ SELECT * FROM parse_evtx(filename=srcDir + '/artifacts/testdata/files/Security_1
   "SourceIP": "null",
   "Description": "LOGOFF_DISCONNECT"
  }
-]SELECT ClearedLog, Message, Message =~ "The audit log was cleared." FROM Artifact.Windows.EventLogs.Cleared()[
+]SELECT ClearedLog, Message =~ "The audit log was cleared." FROM Artifact.Windows.EventLogs.Cleared()[
  {
   "ClearedLog": "Security",
-  "Message": "The audit log was cleared.%nSubject:%n%tSecurity ID:%t%1%n%tAccount Name:%t%2%n%tDomain Name:%t%3%n%tLogon ID:%t%4\r\n",
   "Message =~ \"The audit log was cleared.\"": true
  },
  {
-  "ClearedLog": null,
-  "Message": "Log clear\r\n",
+  "ClearedLog": "System",
   "Message =~ \"The audit log was cleared.\"": false
  }
 ]

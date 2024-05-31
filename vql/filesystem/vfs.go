@@ -30,6 +30,7 @@ func (self VFSListDirectoryPlugin) Call(
 
 	go func() {
 		defer close(output_chan)
+		defer vql_subsystem.RegisterMonitor("vfs_ls", args)()
 
 		arg := &VFSListDirectoryPluginArgs{}
 		err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
@@ -116,6 +117,7 @@ func listDir(
 
 		case output_chan <- &services.VFSListRow{
 			FullPath:   f.FullPath(),
+			OSPath:     f.OSPath(),
 			Components: f.OSPath().Components,
 			Accessor:   accessor_name,
 			Data:       f.Data(),

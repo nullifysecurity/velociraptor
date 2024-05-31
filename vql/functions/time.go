@@ -12,6 +12,7 @@ import (
 
 	"github.com/Velocidex/ordereddict"
 	"github.com/araddon/dateparse"
+	"www.velocidex.com/golang/velociraptor/constants"
 	"www.velocidex.com/golang/velociraptor/third_party/cache"
 	"www.velocidex.com/golang/velociraptor/utils"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
@@ -79,7 +80,7 @@ func getTimezone(scope types.Scope) (*time.Location, string) {
 
 	// Otherwise the user may have specified a global timezone (which
 	// also affects output).
-	tz, pres = scope.Resolve("TZ")
+	tz, pres = scope.Resolve(constants.TZ)
 	if pres {
 		tz_str, ok := tz.(string)
 		if ok {
@@ -151,6 +152,9 @@ func (self _Timestamp) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) *vfi
 
 func (self _Timestamp) Call(ctx context.Context, scope vfilter.Scope,
 	args *ordereddict.Dict) vfilter.Any {
+
+	defer vql_subsystem.RegisterMonitor("timestamp", args)()
+
 	arg := &_TimestampArg{}
 	err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
 	if err != nil {
@@ -159,15 +163,15 @@ func (self _Timestamp) Call(ctx context.Context, scope vfilter.Scope,
 	}
 
 	if arg.CocoaTime > 0 {
-		return time.Unix((arg.CocoaTime + 978307200), 0)
+		return time.Unix((arg.CocoaTime + 978307200), 0).UTC()
 	}
 
 	if arg.MacTime > 0 {
-		return time.Unix((arg.MacTime - 2082844800), 0)
+		return time.Unix((arg.MacTime - 2082844800), 0).UTC()
 	}
 
 	if arg.WinFileTime > 0 {
-		return time.Unix((arg.WinFileTime/10000000)-11644473600, 0)
+		return time.Unix((arg.WinFileTime/10000000)-11644473600, 0).UTC()
 	}
 
 	if arg.String != "" {
@@ -182,22 +186,26 @@ func (self _Timestamp) Call(ctx context.Context, scope vfilter.Scope,
 			if err != nil {
 				return vfilter.Null{}
 			}
-			return result
+			return result.UTC()
 		}
 	}
 
-	result, err := TimeFromAny(scope, arg.Epoch)
+	result, err := TimeFromAny(ctx, scope, arg.Epoch)
 	if err != nil {
 		return vfilter.Null{}
 	}
 
-	return result
+	return result.UTC()
 }
 
-func TimeFromAny(scope vfilter.Scope, timestamp vfilter.Any) (time.Time, error) {
+func TimeFromAny(ctx context.Context,
+	scope vfilter.Scope, timestamp vfilter.Any) (time.Time, error) {
 	sec := int64(0)
 	dec := int64(0)
 	switch t := timestamp.(type) {
+	case vfilter.LazyExpr:
+		return TimeFromAny(ctx, scope, t.ReduceWithScope(ctx, scope))
+
 	case float64:
 		sec_f, dec_f := math.Modf(t)
 		sec = int64(sec_f)
@@ -212,7 +220,7 @@ func TimeFromAny(scope vfilter.Scope, timestamp vfilter.Any) (time.Time, error) 
 		// It might really be an int encoded as a string.
 		int_time, ok := utils.ToInt64(t)
 		if ok {
-			return TimeFromAny(scope, int_time)
+			return TimeFromAny(ctx, scope, int_time)
 		}
 
 		return ParseTimeFromString(scope, t)

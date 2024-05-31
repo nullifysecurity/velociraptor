@@ -38,7 +38,7 @@ type CollectPluginArgs struct {
 	Password            string              `vfilter:"optional,field=password,doc=An optional password to encrypt the collection zip."`
 	Format              string              `vfilter:"optional,field=format,doc=Output format (csv, jsonl, csv_only)."`
 	ArtifactDefinitions vfilter.Any         `vfilter:"optional,field=artifact_definitions,doc=Optional additional custom artifacts."`
-	Template            string              `vfilter:"optional,field=template,doc=The name of a template artifact (i.e. one which has report of type HTML)."`
+	Template            string              `vfilter:"optional,field=template,doc=(Deprecated Ignored)."`
 	Level               int64               `vfilter:"optional,field=level,doc=Compression level between 0 (no compression) and 9."`
 	OpsPerSecond        int64               `vfilter:"optional,field=ops_per_sec,doc=Rate limiting for collections (deprecated)."`
 	CpuLimit            float64             `vfilter:"optional,field=cpu_limit,doc=Set query cpu_limit value"`
@@ -46,6 +46,7 @@ type CollectPluginArgs struct {
 	ProgressTimeout     float64             `vfilter:"optional,field=progress_timeout,doc=If no progress is detected in this many seconds, we terminate the query and output debugging information"`
 	Timeout             float64             `vfilter:"optional,field=timeout,doc=Total amount of time in seconds, this collection will take. Collection is cancelled when timeout is exceeded."`
 	Metadata            vfilter.StoredQuery `vfilter:"optional,field=metadata,doc=Metadata to store in the zip archive. Outputs to metadata.json in top level of zip file."`
+	Concurrency         int64               `vfilter:"optional,field=concurrency,doc=Number of concurrent collections."`
 }
 
 type CollectPlugin struct{}
@@ -58,6 +59,8 @@ func (self CollectPlugin) Call(
 
 	go func() {
 		defer close(output_chan)
+
+		defer vql_subsystem.RegisterMonitor("collect", args)()
 
 		// This plugin allows one to create files (for the output
 		// zip), It is very privileged.
@@ -80,7 +83,12 @@ func (self CollectPlugin) Call(
 		}
 
 		collection_manager := newCollectionManager(ctx, config_obj,
-			output_chan, scope)
+			output_chan, int(arg.Concurrency), scope)
+
+		// Make sure the Close() is called under any circumstances.
+		vql_subsystem.GetRootScope(scope).AddDestructor(func() {
+			collection_manager.Close()
+		})
 		defer collection_manager.Close()
 
 		request, err := self.configureCollection(ctx, collection_manager, arg)
@@ -321,7 +329,7 @@ func AddSpecProtobuf(
 
 			case "timestamp":
 				if !is_str && !utils.IsNil(value_any) {
-					value_time, err := functions.TimeFromAny(scope, value_any)
+					value_time, err := functions.TimeFromAny(ctx, scope, value_any)
 					if err != nil {
 						scope.Log("Invalid timestamp for %v",
 							parameter_definition.Name)
@@ -381,7 +389,7 @@ func CheckArtifactModification(
 			return errors.New("Permission denied: ARTIFACT_WRITER")
 		}
 
-	case "SERVER", "SERVER_EVENT", "INTERNAL":
+	case "SERVER", "SERVER_EVENT", "NOTEBOOK", "INTERNAL":
 		ok, err = acl_manager.CheckAccess(acls.SERVER_ARTIFACT_WRITER)
 		if !ok {
 			return errors.New("Permission denied: SERVER_ARTIFACT_WRITER")
@@ -414,7 +422,7 @@ func CheckArtifactCollection(
 			return errors.New("Permission denied: COLLECT_CLIENT")
 		}
 
-	case "SERVER", "SERVER_EVENT", "INTERNAL":
+	case "SERVER", "SERVER_EVENT", "NOTEBOOK", "INTERNAL":
 		ok, err = acl_manager.CheckAccess(acls.COLLECT_SERVER)
 		if !ok {
 			return errors.New("Permission denied: COLLECT_SERVER")

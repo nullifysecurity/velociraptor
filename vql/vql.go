@@ -1,6 +1,6 @@
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+   Copyright (C) 2019-2024 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -67,7 +67,7 @@ func RegisterPlugin(plugin vfilter.PluginGeneratorInterface) {
 	name := plugin.Info(nil, nil).Name
 	_, pres := exportedPlugins[name]
 	if pres {
-		panic("Multiple plugins defined")
+		panic(fmt.Sprintf("Multiple plugins defined: %v", name))
 	}
 
 	exportedPlugins[name] = plugin
@@ -79,7 +79,7 @@ func RegisterFunction(plugin vfilter.FunctionInterface) {
 	name := plugin.Info(nil, nil).Name
 	_, pres := exportedFunctions[name]
 	if pres {
-		panic("Multiple plugins defined")
+		panic(fmt.Sprintf("Multiple vql functions defined: %v", name))
 	}
 
 	exportedFunctions[name] = plugin

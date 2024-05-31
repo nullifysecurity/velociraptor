@@ -101,7 +101,13 @@ func GetOffsetFile(full_path *accessors.OSPath, scope vfilter.Scope) (
 
 	stat, err := accessor.Lstat(delegate_path)
 	if err != nil {
-		return nil, err
+		// If we can not call stat on the file it is not a fatal
+		// error. For example, raw files are not always statable - in
+		// that case we provide a fake stat object.
+		stat = &accessors.VirtualFileInfo{
+			Path:  full_path,
+			Size_: 1<<63 - 1,
+		}
 	}
 
 	return &OffsetReader{
@@ -120,7 +126,8 @@ func init() {
 For Example
 
 FileName = pathspec(
-      DelegateAccessor="data", DelegatePath=MyData,
-      Path=[dict(Offset=0,Length=5), dict(Offset=10,Length=5)])
+      DelegateAccessor="data",
+      DelegatePath=MyData,
+      Path="/5")
 `)
 }

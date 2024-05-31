@@ -61,6 +61,9 @@ type ServiceContainer interface {
 	Notifier() (Notifier, error)
 	ACLManager() (ACLManager, error)
 	AuditManager() (AuditManager, error)
+	Scheduler() (Scheduler, error)
+	SecretsService() (SecretsService, error)
+	BackupService() (BackupService, error)
 }
 
 // The org manager manages multi-tenancies.
@@ -70,7 +73,7 @@ type OrgManager interface {
 	CreateNewOrg(name, id string) (*api_proto.OrgRecord, error)
 	ListOrgs() []*api_proto.OrgRecord
 	GetOrg(org_id string) (*api_proto.OrgRecord, error)
-	DeleteOrg(ctx context.Context, org_id string) error
+	DeleteOrg(ctx context.Context, principal, org_id string) error
 
 	// The manager is responsible for running multiple services - one
 	// for each org. This ensures org services are separated out and

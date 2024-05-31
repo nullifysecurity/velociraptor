@@ -1,19 +1,19 @@
 /*
-   Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+Velociraptor - Dig Deeper
+Copyright (C) 2019-2024 Rapid7 Inc.
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published
-   by the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package networking
 
@@ -50,6 +50,8 @@ type UploadFunction struct{}
 func (self *UploadFunction) Call(ctx context.Context,
 	scope vfilter.Scope,
 	args *ordereddict.Dict) vfilter.Any {
+
+	defer vql_subsystem.RegisterMonitor("upload", args)()
 
 	uploader, ok := artifacts.GetUploader(scope)
 	if !ok {
@@ -99,21 +101,21 @@ func (self *UploadFunction) Call(ctx context.Context,
 		return vfilter.Null{}
 	}
 
-	mtime, err := functions.TimeFromAny(scope, arg.Mtime)
+	mtime, err := functions.TimeFromAny(ctx, scope, arg.Mtime)
 	if err != nil {
 		mtime = stat.ModTime()
 	}
 
-	atime, _ := functions.TimeFromAny(scope, arg.Atime)
-	ctime, _ := functions.TimeFromAny(scope, arg.Ctime)
-	btime, _ := functions.TimeFromAny(scope, arg.Btime)
+	atime, _ := functions.TimeFromAny(ctx, scope, arg.Atime)
+	ctime, _ := functions.TimeFromAny(ctx, scope, arg.Ctime)
+	btime, _ := functions.TimeFromAny(ctx, scope, arg.Btime)
 
 	upload_response, err := uploader.Upload(
 		ctx, scope, arg.File,
 		arg.Accessor,
 		arg.Name,
 		stat.Size(), // Expected size.
-		mtime, atime, ctime, btime,
+		mtime, atime, ctime, btime, stat.Mode(),
 		file)
 	if err != nil {
 		return &uploads.UploadResponse{
@@ -151,6 +153,8 @@ type UploadDirectoryFunction struct{}
 func (self *UploadDirectoryFunction) Call(ctx context.Context,
 	scope vfilter.Scope,
 	args *ordereddict.Dict) vfilter.Any {
+
+	defer vql_subsystem.RegisterMonitor("upload_directory", args)()
 
 	arg := &UploadDirectoryFunctionArgs{}
 	err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
@@ -211,21 +215,21 @@ func (self *UploadDirectoryFunction) Call(ctx context.Context,
 	}
 
 	// Stat only has a single time.
-	mtime, err := functions.TimeFromAny(scope, arg.Mtime)
+	mtime, err := functions.TimeFromAny(ctx, scope, arg.Mtime)
 	if err != nil {
 		mtime = stat.ModTime()
 	}
 
-	atime, _ := functions.TimeFromAny(scope, arg.Atime)
-	ctime, _ := functions.TimeFromAny(scope, arg.Ctime)
-	btime, _ := functions.TimeFromAny(scope, arg.Btime)
+	atime, _ := functions.TimeFromAny(ctx, scope, arg.Atime)
+	ctime, _ := functions.TimeFromAny(ctx, scope, arg.Ctime)
+	btime, _ := functions.TimeFromAny(ctx, scope, arg.Btime)
 
 	upload_response, err := uploader.Upload(
 		ctx, scope, arg.File,
 		arg.Accessor,
 		arg.Name,
 		stat.Size(), // Expected size.
-		mtime, atime, ctime, btime,
+		mtime, atime, ctime, btime, stat.Mode(),
 		file)
 	if err != nil {
 		return &uploads.UploadResponse{

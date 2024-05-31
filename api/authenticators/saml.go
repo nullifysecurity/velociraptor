@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/Velocidex/ordereddict"
 	"github.com/crewjam/saml/samlsp"
@@ -71,16 +72,30 @@ func (self *SamlAuthenticator) AddHandlers(mux *http.ServeMux) error {
 		return err
 	}
 
-	samlMiddleware, err = samlsp.New(samlsp.Options{
+	opts := samlsp.Options{
 		IDPMetadata: idpMetadata,
 		URL:         *rootURL,
 		Key:         key,
 		Certificate: cert,
-	})
+	}
+	samlMiddleware, err = samlsp.New(opts)
 	if err != nil {
 		return err
 	}
-	mux.Handle("/saml/", samlMiddleware)
+
+	expiry_min := self.authenticator.DefaultSessionExpiryMin
+	if expiry_min == 0 {
+		expiry_min = 60 * 24 // 1 Day by default
+	}
+	maxAge := time.Minute * time.Duration(expiry_min)
+	jwtSessionCodec := samlsp.DefaultSessionCodec(opts)
+	jwtSessionCodec.MaxAge = maxAge
+	cookieSessionProvider := samlsp.DefaultSessionProvider(opts)
+	cookieSessionProvider.MaxAge = maxAge
+	cookieSessionProvider.Codec = jwtSessionCodec
+	samlMiddleware.Session = cookieSessionProvider
+
+	mux.Handle("/saml/", IpFilter(self.config_obj, samlMiddleware))
 	logger.Info("Authentication via SAML enabled")
 	return nil
 }
@@ -112,10 +127,10 @@ func (self *SamlAuthenticator) AuthenticateUserHandler(
 
 		username := sa.GetAttributes().Get(self.user_attribute)
 		users := services.GetUserManager()
-		user_record, err := users.GetUser(r.Context(), username)
-		if err == nil && user_record.Name == username {
+		user_record, err := users.GetUser(r.Context(), username, username)
+		if err == nil {
 			// Does the user have access to the specified org?
-			err = CheckOrgAccess(r, user_record)
+			err = CheckOrgAccess(self.config_obj, r, user_record)
 		}
 
 		if err != nil {
@@ -140,7 +155,7 @@ Contact your system administrator to get an account, then try again.
 		}
 
 		user_info := &api_proto.VelociraptorUser{
-			Name: username,
+			Name: user_record.Name,
 		}
 
 		serialized, _ := json.Marshal(user_info)

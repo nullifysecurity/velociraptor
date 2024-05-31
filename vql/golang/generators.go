@@ -28,7 +28,7 @@ func (self Generator) Eval(ctx context.Context, scope types.Scope) <-chan types.
 
 		config_obj, ok := vql_subsystem.GetServerConfig(scope)
 		if !ok {
-			scope.Log("Command can only run on the server")
+			scope.Log("generate: Command can only run on the server")
 			return
 		}
 
@@ -75,6 +75,9 @@ type GeneratorFunction struct{}
 func (self *GeneratorFunction) Call(ctx context.Context,
 	scope vfilter.Scope,
 	args *ordereddict.Dict) vfilter.Any {
+
+	defer vql_subsystem.RegisterMonitor("generate", args)()
+
 	arg := &GeneratorArgs{}
 	err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
 	if err != nil {
@@ -84,7 +87,7 @@ func (self *GeneratorFunction) Call(ctx context.Context,
 
 	config_obj, ok := vql_subsystem.GetServerConfig(scope)
 	if !ok {
-		scope.Log("Command can only run on the server")
+		scope.Log("generate: Command can only run on the server")
 		return false
 	}
 

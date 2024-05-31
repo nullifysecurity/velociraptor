@@ -23,9 +23,12 @@ type PathSpecArgs struct {
 
 type PathSpecFunction struct{}
 
-func (self *PathSpecFunction) Call(ctx context.Context,
+func (self PathSpecFunction) Call(ctx context.Context,
 	scope vfilter.Scope,
 	args *ordereddict.Dict) vfilter.Any {
+
+	defer vql_subsystem.RegisterMonitor("pathspec", args)()
+
 	arg := &PathSpecArgs{}
 	err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
 	if err != nil {
@@ -123,7 +126,7 @@ func parseOSPath(path *accessors.OSPath) *ordereddict.Dict {
 		Set("Components", path.Components)
 }
 
-func (self *PathSpecFunction) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) *vfilter.FunctionInfo {
+func (self PathSpecFunction) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) *vfilter.FunctionInfo {
 	return &vfilter.FunctionInfo{
 		Name:    "pathspec",
 		Doc:     "Create a structured path spec to pass to certain accessors.",

@@ -1,4 +1,5 @@
-//+build extras
+//go:build extras
+// +build extras
 
 package tools
 
@@ -38,6 +39,8 @@ func (self *GCSUploadFunction) Call(ctx context.Context,
 	scope vfilter.Scope,
 	args *ordereddict.Dict) vfilter.Any {
 
+	defer vql_subsystem.RegisterMonitor("upload_gcs", args)()
+
 	arg := &GCSUploadArgs{}
 	err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
 	if err != nil {
@@ -53,13 +56,13 @@ func (self *GCSUploadFunction) Call(ctx context.Context,
 
 	accessor, err := accessors.GetAccessor(arg.Accessor, scope)
 	if err != nil {
-		scope.Log("upload_gcs: %v", err)
+		scope.Log("ERROR:upload_gcs: %v", err)
 		return vfilter.Null{}
 	}
 
 	file, err := accessor.OpenWithOSPath(arg.File)
 	if err != nil {
-		scope.Log("upload_gcs: Unable to open %s: %s",
+		scope.Log("ERROR:upload_gcs: Unable to open %s: %s",
 			arg.File, err.Error())
 		return &vfilter.Null{}
 	}
@@ -71,7 +74,7 @@ func (self *GCSUploadFunction) Call(ctx context.Context,
 
 	stat, err := accessor.LstatWithOSPath(arg.File)
 	if err != nil {
-		scope.Log("upload_gcs: Unable to stat %s: %v",
+		scope.Log("ERROR:upload_gcs: Unable to stat %s: %v",
 			arg.File, err)
 	} else if !stat.IsDir() {
 		upload_response, err := upload_gcs(
@@ -79,7 +82,7 @@ func (self *GCSUploadFunction) Call(ctx context.Context,
 			arg.Bucket,
 			arg.Name, arg.Credentials)
 		if err != nil {
-			scope.Log("upload_gcs: %v", err)
+			scope.Log("ERROR:upload_gcs: %v", err)
 			return vfilter.Null{}
 		}
 		return upload_response
@@ -121,7 +124,7 @@ func upload_gcs(ctx context.Context, scope vfilter.Scope,
 	defer func() {
 		err := writer.Close()
 		if err != nil {
-			scope.Log("upload_gcs: ERROR writing to object: %v", err)
+			scope.Log("ERROR:upload_gcs: <red>ERROR writing to object: %v", err)
 		} else {
 			attr := writer.Attrs()
 			serialized, _ := json.Marshal(attr)
@@ -132,7 +135,7 @@ func upload_gcs(ctx context.Context, scope vfilter.Scope,
 			if string(attr.MD5) == string(md5_sum.Sum(nil)) {
 				report = "Hash checks out."
 			}
-			scope.Log("upload_gcs: GCS Calculated MD5: %016x %v",
+			scope.Log("ERROR: upload_gcs: <red>GCS Calculated MD5: %016x %v",
 				attr.MD5, report)
 		}
 	}()

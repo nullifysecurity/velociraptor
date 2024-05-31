@@ -74,7 +74,7 @@ func (self *NannyService) _CheckMemory(message string) bool {
 
 	if m.Alloc > self.MaxMemoryHardLimit {
 		self.Logger.Error(
-			"NannyService: <red>%v of %v bytes: current heap usage %v bytes</>",
+			"NannyService: <red>Exceeding memory limit: %v of %v bytes: current heap usage %v bytes</>",
 			message, self.MaxMemoryHardLimit, m.Alloc)
 
 		self._Exit()
@@ -138,6 +138,7 @@ func (self *NannyService) Start(
 
 			case <-Clock.After(10 * time.Second):
 				self.mu.Lock()
+
 				called := self._CheckTime(self.last_pump_to_rb_attempt, "Pump to Ring Buffer")
 				if self._CheckTime(self.last_pump_rb_to_server_attempt, "Pump Ring Buffer to Server") {
 					called = true

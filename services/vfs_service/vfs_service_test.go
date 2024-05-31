@@ -37,6 +37,8 @@ type VFSServiceTestSuite struct {
 
 	client_id string
 	flow_id   string
+
+	closer func()
 }
 
 func (self *VFSServiceTestSuite) SetupTest() {
@@ -52,13 +54,15 @@ func (self *VFSServiceTestSuite) SetupTest() {
 	// Register a user manager that returns the superuser user to skip
 	// any ACLs checks. This helps us test the API server to make sure
 	// the GUI will present the correct data.
-	users.RegisterTestUserManager(self.ConfigObj, "VelociraptorServer")
+	users.RegisterTestUserManager(
+		self.ConfigObj, utils.GetSuperuserName(self.ConfigObj))
 
-	journal_service, err := services.GetJournal(self.ConfigObj)
-	assert.NoError(self.T(), err)
+	self.closer = utils.MockTime(utils.NewMockClock(time.Unix(1000, 0)))
+}
 
-	// Mock the time so we get a stable output
-	journal_service.SetClock(&utils.MockClock{time.Unix(1000, 0)})
+func (self *VFSServiceTestSuite) TearDownTest() {
+	self.TestSuite.TearDownTest()
+	self.closer()
 }
 
 func (self *VFSServiceTestSuite) EmulateCollection(

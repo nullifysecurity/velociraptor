@@ -2,6 +2,26 @@ SELECT mock(plugin='info', results=[dict(OS='windows'), dict(OS='windows')] ) FR
  {
   "mock(plugin='info', results=[dict(OS='windows'), dict(OS='windows')])": null
  }
+]SELECT OSPath.Path AS Key, Data FROM glob(globs="*", accessor="raw_reg", root=pathspec( Path="/Local Settings/Software/Microsoft/Windows/Shell/BagMRU", DelegatePath=srcDir+"/artifacts/testdata/files/UsrClass.dat")) WHERE OSPath.Basename =~ "0"[
+ {
+  "Key": "\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\BagMRU\\0",
+  "Data": {
+   "type": "Key"
+  }
+ }
+]SELECT OSPath.Path AS Key, Data FROM glob(globs="*", accessor="raw_reg", root=pathspec( Path="/Local Settings/Software/Microsoft/Windows/Shell/BagMRU/0", DelegatePath=srcDir+"/artifacts/testdata/files/UsrClass.dat")) WHERE OSPath.Basename =~ "@"[
+ {
+  "Key": "\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\BagMRU\\0\\@",
+  "Data": {
+   "type": "REG_BINARY",
+   "data_len": 22,
+   "value": "FAAfgMuFn2cgAoBAsptVQMwFqrYAAA=="
+  }
+ }
+]SELECT format(format="%02x", args=read_file(accessor='raw_reg', filename=pathspec( Path="/Local Settings/Software/Microsoft/Windows/Shell/BagMRU/0/@", DelegatePath=srcDir+"/artifacts/testdata/files/UsrClass.dat"))) AS ValueContent FROM scope()[
+ {
+  "ValueContent": "14001f80cb859f6720028040b29b5540cc05aab60000"
+ }
 ]SELECT LastModified, Binary, Name, Size, ProductName, Publisher, BinFileVersion FROM Artifact.Windows.System.Amcache( source="InventoryApplicationFile", amCacheGlob=srcDir+"/artifacts/testdata/files/Amcache.hve") LIMIT 5[
  {
   "LastModified": "2019-03-02T08:21:12Z",
@@ -61,7 +81,7 @@ SELECT mock(plugin='info', results=[dict(OS='windows'), dict(OS='windows')] ) FR
   "_Parsed": {
    "ItemIDSize": 20,
    "Offset": 0,
-   "Type": 16,
+   "Type": 1,
    "Subtype": 1,
    "ShellBag": {
     "Description": {
@@ -83,7 +103,7 @@ SELECT mock(plugin='info', results=[dict(OS='windows'), dict(OS='windows')] ) FR
   "_Parsed": {
    "ItemIDSize": 20,
    "Offset": 0,
-   "Type": 16,
+   "Type": 1,
    "Subtype": 1,
    "ShellBag": {
     "Description": {
@@ -106,7 +126,7 @@ SELECT mock(plugin='info', results=[dict(OS='windows'), dict(OS='windows')] ) FR
   "_Parsed": {
    "ItemIDSize": 20,
    "Offset": 0,
-   "Type": 32,
+   "Type": 2,
    "Subtype": 0,
    "ShellBag": {
     "Name": "",
@@ -130,7 +150,7 @@ SELECT mock(plugin='info', results=[dict(OS='windows'), dict(OS='windows')] ) FR
   "_Parsed": {
    "ItemIDSize": 85,
    "Offset": 0,
-   "Type": 16,
+   "Type": 1,
    "Subtype": 1,
    "ShellBag": {
     "Description": {
@@ -152,7 +172,7 @@ SELECT mock(plugin='info', results=[dict(OS='windows'), dict(OS='windows')] ) FR
   "_Parsed": {
    "ItemIDSize": 20,
    "Offset": 0,
-   "Type": 16,
+   "Type": 1,
    "Subtype": 1,
    "ShellBag": {
     "Description": {
@@ -188,7 +208,7 @@ SELECT mock(plugin='info', results=[dict(OS='windows'), dict(OS='windows')] ) FR
   "_Parsed": {
    "ItemIDSize": 58,
    "Offset": 0,
-   "Type": 64,
+   "Type": 4,
    "Subtype": 1,
    "ShellBag": {
     "Name": "\\\\vmware-host\\Shared Folders",
@@ -220,7 +240,7 @@ SELECT mock(plugin='info', results=[dict(OS='windows'), dict(OS='windows')] ) FR
   "_Parsed": {
    "ItemIDSize": 84,
    "Offset": 0,
-   "Type": 48,
+   "Type": 3,
    "Subtype": 1,
    "ShellBag": {
     "Size": 84,
@@ -280,7 +300,7 @@ SELECT mock(plugin='info', results=[dict(OS='windows'), dict(OS='windows')] ) FR
   "_Parsed": {
    "ItemIDSize": 74,
    "Offset": 0,
-   "Type": 48,
+   "Type": 3,
    "Subtype": 1,
    "ShellBag": {
     "Size": 74,
@@ -319,7 +339,7 @@ SELECT mock(plugin='info', results=[dict(OS='windows'), dict(OS='windows')] ) FR
    }
   }
  }
-]SELECT ParsedF, ParsedV FROM Artifact.Windows.Forensics.SAM( SAMPath=srcDir+"/artifacts/testdata/files/SAM")[
+]SELECT ParsedF, ParsedV FROM Artifact.Windows.Forensics.SAM( SAMPath=srcDir+"/artifacts/testdata/files/SAM", source="Parsed")[
  {
   "ParsedF": {
    "LastLoginDate": "1601-01-01T00:00:00Z",
@@ -455,6 +475,32 @@ SELECT mock(plugin='info', results=[dict(OS='windows'), dict(OS='windows')] ) FR
    "lmpwd_hash": "\u0002\u0002",
    "ntpwd_hash": "\u0002\u0002\u0010"
   }
+ }
+]SELECT * FROM Artifact.Windows.Forensics.SAM( SAMPath=srcDir+"/artifacts/testdata/files/SAM", source="CreateTimes")[
+ {
+  "Username": "Administrator",
+  "CreatedTime": "2021-10-08T00:54:13Z",
+  "_Source": "Windows.Forensics.SAM/CreateTimes"
+ },
+ {
+  "Username": "DefaultAccount",
+  "CreatedTime": "2021-10-08T00:54:13Z",
+  "_Source": "Windows.Forensics.SAM/CreateTimes"
+ },
+ {
+  "Username": "Guest",
+  "CreatedTime": "2021-10-08T00:54:13Z",
+  "_Source": "Windows.Forensics.SAM/CreateTimes"
+ },
+ {
+  "Username": "WDAGUtilityAccount",
+  "CreatedTime": "2021-10-08T00:54:13Z",
+  "_Source": "Windows.Forensics.SAM/CreateTimes"
+ },
+ {
+  "Username": "test",
+  "CreatedTime": "2021-10-07T08:07:32Z",
+  "_Source": "Windows.Forensics.SAM/CreateTimes"
  }
 ]SELECT utf16(string=read_file(filename=pathspec( Path="\\Root\\DeviceCensus\\Processor\\ProcessorIdentifier", DelegatePath=srcDir+"/artifacts/testdata/files/Amcache.hve", DelegateAccessor='file'), accessor="raw_reg")) FROM scope()[
  {

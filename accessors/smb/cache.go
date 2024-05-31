@@ -13,8 +13,10 @@ import (
 	"github.com/hirochachacha/go-smb2"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"www.velocidex.com/golang/velociraptor/constants"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/vfilter"
+	"www.velocidex.com/golang/vfilter/utils/dict"
 )
 
 var (
@@ -161,15 +163,18 @@ func NewSMBMountCache(scope vfilter.Scope) *SMBMountCache {
 	}
 	result.lru.SetTTL(time.Hour)
 	result.lru.SetExpirationCallback(
-		func(key string, value interface{}) {
+		func(key string, value interface{}) error {
 			ctx, ok := value.(*SMBConnectionContext)
 			if ok {
-				ctx.Close()
+				// Do not block the lru while closing.
+				go ctx.Close()
 			}
+			return nil
 		})
 
 	vql_subsystem.GetRootScope(scope).AddDestructor(func() {
 		result.lru.Flush()
+		result.lru.Close()
 		cancel()
 	})
 	return result
@@ -179,12 +184,12 @@ func getCreadentials(
 	ctx context.Context, scope vfilter.Scope, hostname string) (
 	*smb2.NTLMInitiator, error) {
 
-	credentials, pres := scope.Resolve("SMB_CREDENTIALS")
+	credentials, pres := scope.Resolve(constants.SMB_CREDENTIALS)
 	if !pres {
 		return nil, errors.New("No credentials provided for smb connections")
 	}
 
-	creds, pres := vfilter.RowToDict(ctx, scope, credentials).GetString(hostname)
+	creds, pres := dict.RowToDict(ctx, scope, credentials).GetString(hostname)
 	if !pres {
 		return nil, fmt.Errorf("No credentials found for %v", hostname)
 	}

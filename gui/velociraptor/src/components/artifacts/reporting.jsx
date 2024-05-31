@@ -4,7 +4,7 @@ import _ from 'lodash';
 import React from 'react';
 import PropTypes from 'prop-types';
 import {CancelToken} from 'axios';
-import parse from 'html-react-parser';
+import parseHTML from '../core/sanitize.jsx';
 
 import api from '../core/api-service.jsx';
 import VeloTable from '../core/table.jsx';
@@ -17,10 +17,12 @@ import { NotebookLineChart, NotebookTimeChart,
          NotebookScatterChart, NotebookBarChart
        } from '../notebooks/notebook-chart-renderer.jsx';
 
-// Renders a report in the DOM.
+import VeloValueRenderer from '../utils/value.jsx';
+import { JSONparse } from '../utils/json_parse.jsx';
 
-const parse_param = domNode=>JSON.parse(decodeURIComponent(
-    domNode.attribs.params || "{}"));
+// Renders a report in the DOM.
+const parse_param = domNode=>JSONparse(decodeURIComponent(
+    domNode.attribs.params, {}));
 
 // NOTE: The server sanitizes reports using the bluemonday
 // sanitization. We therefore trust the output and are allowed to
@@ -110,7 +112,7 @@ export default class VeloReportViewer extends React.Component {
             let new_state  = {
                 template: response.data.template || "No Reports",
                 messages: response.data.messages || [],
-                data: JSON.parse(response.data.data),
+                data: JSONparse(response.data.data),
                 loading: false,
                 version: this.state.version + 1,
             };
@@ -142,18 +144,19 @@ export default class VeloReportViewer extends React.Component {
         html = html.replace(/>\s*<\/tr/g, "></tr");
         html = html.replace(/>\s*<\/th/g, "></th");
         html = html.replace(/>\s*<\/td/g, "></td");
+
         return html;
     }
 
     render() {
-        let template = parse(this.cleanupHTML(this.state.template), {
+        let template = parseHTML(this.cleanupHTML(this.state.template), {
             replace: (domNode) => {
                 if (domNode.name === "inline-table-viewer") {
                     try {
                         let data = this.state.data;
                         let value = decodeURIComponent(domNode.attribs.value || "");
                         let response = data[value] || {};
-                        let rows = JSON.parse(response.Response);
+                        let rows = JSONparse(response.Response, []);
                         return (
                             <VeloTable
                               rows={rows}
@@ -170,7 +173,7 @@ export default class VeloReportViewer extends React.Component {
                     if (value) {
                         let match = re.exec(value);
                         let data = this.state.data[match[1]];
-                        let rows = JSON.parse(data.Response);
+                        let rows = JSONparse(data.Response, []);
 
                         return (
                             <VeloTable rows={rows} columns={data.Columns} />
@@ -191,8 +194,12 @@ export default class VeloReportViewer extends React.Component {
 
                 if (domNode.name === "grr-tool-viewer") {
                     let name = decodeURIComponent(domNode.attribs.name ||"");
+                    let tool_version = decodeURIComponent(
+                        domNode.attribs.version ||"");
                     return (
-                        <ToolViewer name={name} version={this.state.version}/>
+                        <ToolViewer name={name}
+                                    tool_version={tool_version}
+                                    version={this.state.version}/>
                     );
                 };
 
@@ -203,6 +210,12 @@ export default class VeloReportViewer extends React.Component {
                     );
                 };
 
+                if (domNode.name === "velo-value") {
+                    let value = decodeURIComponent(domNode.attribs.value || "");
+                    return <VeloValueRenderer value={value}/>;
+
+                };
+
                 if (domNode.name === "grr-line-chart") {
                     // Figure out where the data is: attribs.value is
                     // something like data['table2']
@@ -211,8 +224,8 @@ export default class VeloReportViewer extends React.Component {
                     let match = re.exec(value);
                     let data = this.state.data[match[1]];
                     try {
-                        let rows = JSON.parse(data.Response);
-                        let params = JSON.parse(decodeURIComponent(domNode.attribs.params));
+                        let rows = JSONparse(data.Response, []);
+                        let params = JSONparse(decodeURIComponent(domNode.attribs.params), {});
                         return (
                             <VeloLineChart data={rows}
                                            columns={data.Columns}
@@ -232,8 +245,9 @@ export default class VeloReportViewer extends React.Component {
                     let match = re.exec(value);
                     let data = this.state.data[match[1]];
                     try {
-                        let rows = JSON.parse(data.Response);
-                        let params = JSON.parse(decodeURIComponent(domNode.attribs.params));
+                        let rows = JSONparse(data.Response, []);
+                        let params = JSONparse(
+                            decodeURIComponent(domNode.attribs.params), {});
                         return (
                             <VeloTimeChart data={rows}
                                            columns={data.Columns}

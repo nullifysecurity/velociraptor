@@ -8,6 +8,7 @@ import (
 
 	"github.com/Velocidex/ordereddict"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
+	"www.velocidex.com/golang/velociraptor/constants"
 	logging "www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/reporting"
 	"www.velocidex.com/golang/velociraptor/services"
@@ -18,8 +19,9 @@ import (
 )
 
 var (
-	unzip_cmd        = app.Command("unzip", "Unzip a container file")
-	unzip_cmd_filter = unzip_cmd.Flag("where", "A WHERE condition for the query").String()
+	unzip_cmd                 = app.Command("unzip", "Unzip a container file")
+	unzip_cmd_report_password = unzip_cmd.Flag("report_password", "Log the X509 session password").Bool()
+	unzip_cmd_filter          = unzip_cmd.Flag("where", "A WHERE condition for the query").String()
 
 	unzip_path = unzip_cmd.Flag("dump_dir", "Directory to dump output files.").
 			Default(".").String()
@@ -69,23 +71,30 @@ func doUnzip() error {
 		return err
 	}
 
+	logger := &LogWriter{config_obj: sm.Config}
 	builder := services.ScopeBuilder{
 		Config:     sm.Config,
 		ACLManager: acl_managers.NewRoleACLManager(sm.Config, "administrator"),
-		Logger:     log.New(&LogWriter{sm.Config}, "", 0),
+		Logger:     log.New(logger, "", 0),
 		Env: ordereddict.NewDict().
 			Set("ZipPath", filename).
 			Set("DumpDir", *unzip_path).
-			Set("MemberGlob", *unzip_cmd_member),
+			Set("MemberGlob", *unzip_cmd_member).
+			Set(constants.REPORT_ZIP_PASSWORD, *unzip_cmd_report_password),
 	}
 
 	if *unzip_cmd_list {
-		return runUnzipList(builder)
+		err = runUnzipList(builder)
 	} else if *unzip_cmd_print {
-		return runUnzipPrint(builder)
+		err = runUnzipPrint(builder)
 	} else {
-		return runUnzipFiles(builder)
+		err = runUnzipFiles(builder)
 	}
+	if err != nil {
+		return err
+	}
+
+	return logger.Error
 }
 
 func runUnzipList(builder services.ScopeBuilder) error {
@@ -101,7 +110,7 @@ func runUnzipList(builder services.ScopeBuilder) error {
 		query += " AND " + *unzip_cmd_filter
 	}
 
-	return runQueryWithEnv(query, builder)
+	return runQueryWithEnv(query, builder, *unzip_format)
 }
 
 func runUnzipFiles(builder services.ScopeBuilder) error {
@@ -122,7 +131,7 @@ func runUnzipFiles(builder services.ScopeBuilder) error {
 		query += " AND " + *unzip_cmd_filter
 	}
 
-	return runQueryWithEnv(query, builder)
+	return runQueryWithEnv(query, builder, *unzip_format)
 }
 
 func runUnzipPrint(builder services.ScopeBuilder) error {
@@ -135,11 +144,11 @@ func runUnzipPrint(builder services.ScopeBuilder) error {
                     accessor='collector')
           WHERE NOT IsDir AND FullPath =~ '.json$'
        }, query={
-          SELECT *
+           SELECT *
           FROM parse_jsonl(filename=OSPath, accessor='collector')
        })
     `
-	return runQueryWithEnv(query, builder)
+	return runQueryWithEnv(query, builder, *unzip_format)
 }
 
 func getAllStats(
@@ -172,7 +181,7 @@ func getAllStats(
 }
 
 func runQueryWithEnv(
-	query string, builder services.ScopeBuilder) error {
+	query string, builder services.ScopeBuilder, format string) error {
 	manager, err := services.GetRepositoryManager(builder.Config)
 	if err != nil {
 		return err
@@ -190,9 +199,9 @@ func runQueryWithEnv(
 	defer cancel()
 
 	for _, vql := range vqls {
-		scope.Log("Running query %v", query)
+		scope.Log("Running query %v", vfilter.FormatToString(scope, vql))
 
-		switch *unzip_format {
+		switch format {
 		case "text":
 			table := reporting.EvalQueryToTable(ctx, scope, vql, os.Stdout)
 			table.Render()

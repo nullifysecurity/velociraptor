@@ -1,19 +1,19 @@
 /*
-   Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+Velociraptor - Dig Deeper
+Copyright (C) 2019-2024 Rapid7 Inc.
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published
-   by the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package event_logs
 
@@ -35,6 +35,7 @@ type _ParseEvtxPluginArgs struct {
 	Filenames []*accessors.OSPath `vfilter:"required,field=filename,doc=A list of event log files to parse."`
 	Accessor  string              `vfilter:"optional,field=accessor,doc=The accessor to use."`
 	Database  string              `vfilter:"optional,field=messagedb,doc=A Message database from https://github.com/Velocidex/evtx-data."`
+	Workers   int64               `vfilter:"optional,field=workers,doc=If specified we use this many workers to parse the file in parallel (default 1)."`
 }
 
 type _ParseEvtxPlugin struct{}
@@ -95,6 +96,7 @@ func (self _ParseEvtxPlugin) Call(
 				}
 				defer fd.Close()
 
+				scope.ChargeOp()
 				chunks, err := evtx.GetChunks(fd)
 				if err != nil {
 					scope.Log("Unable to parse file %s: %v",
@@ -102,31 +104,17 @@ func (self _ParseEvtxPlugin) Call(
 					return
 				}
 
-				for _, chunk := range chunks {
-					records, _ := chunk.Parse(0)
-					for _, i := range records {
-						event_map, ok := i.Event.(*ordereddict.Dict)
-						if !ok {
-							continue
-						}
-						event, pres := ordereddict.GetMap(event_map, "Event")
-						if !pres {
-							continue
-						}
-
-						if resolver != nil {
-							event.Set("Message", evtx.ExpandMessage(event, resolver))
-						}
-
-						select {
-						case <-ctx.Done():
-							return
-
-						case output_chan <- event:
-						}
-					}
+				workers := arg.Workers
+				if workers == 0 {
+					workers = 1
 				}
 
+				pool := newPool(ctx, output_chan, int(workers), resolver)
+				defer pool.Close()
+
+				for _, chunk := range chunks {
+					pool.Run(scope, chunk, resolver)
+				}
 			}()
 		}
 	}()

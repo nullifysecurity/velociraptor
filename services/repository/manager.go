@@ -26,12 +26,16 @@ type RepositoryManager struct {
 	global_repository *Repository
 	wg                *sync.WaitGroup
 	config_obj        *config_proto.Config
+	metadata          *metadataManager
 }
 
 func (self *RepositoryManager) NewRepository() services.Repository {
-	return &Repository{
-		Data: make(map[string]*artifacts_proto.Artifact),
+	result := &Repository{
+		Data:     make(map[string]*artifacts_proto.Artifact),
+		metadata: self.metadata,
 	}
+
+	return result
 }
 
 // Watch for updates from other nodes to the repository manager.
@@ -116,6 +120,35 @@ func (self *RepositoryManager) StartWatchingForUpdates(
 	}()
 
 	return nil
+}
+
+func (self *RepositoryManager) SetArtifactMetadata(
+	ctx context.Context, config_obj *config_proto.Config,
+	principal, name string, metadata *artifacts_proto.ArtifactMetadata) error {
+
+	self.metadata.Set(name, metadata)
+	err := self.metadata.saveMetadata(ctx, config_obj)
+	if err != nil {
+		return err
+	}
+
+	// Tell interested parties that we modified this artifact.
+	journal, err := services.GetJournal(config_obj)
+	if err != nil {
+		return err
+	}
+
+	err = journal.PushRowsToArtifact(ctx, config_obj,
+		[]*ordereddict.Dict{
+			ordereddict.NewDict().
+				Set("setter", principal).
+				Set("artifact", name).
+				Set("op", "metadata").
+				Set("metadata", metadata).
+				Set("id", self.id),
+		}, "Server.Internal.ArtifactModification", "server", "")
+
+	return err
 }
 
 func (self *RepositoryManager) GetGlobalRepository(
@@ -274,6 +307,10 @@ func NewRepositoryManagerForTest(
 	config_obj *config_proto.Config) (services.RepositoryManager, error) {
 	self := _newRepositoryManager(config_obj, wg)
 
+	// It is not an error if the metadata file does not exist, just
+	// move on.
+	_ = self.metadata.loadMetadata(ctx, config_obj)
+
 	// Load some artifacts via the autoexec mechanism.
 	if config_obj.Autoexec != nil {
 		for _, def := range config_obj.Autoexec.ArtifactDefinitions {
@@ -294,13 +331,20 @@ func NewRepositoryManagerForTest(
 func _newRepositoryManager(
 	config_obj *config_proto.Config,
 	wg *sync.WaitGroup) *RepositoryManager {
+
+	// Shared between the manager repositories.
+	metadata_manager := &metadataManager{}
+
 	return &RepositoryManager{
 		wg:         wg,
 		id:         utils.GetId(),
 		config_obj: config_obj,
 		global_repository: &Repository{
-			Data: make(map[string]*artifacts_proto.Artifact),
+			// Artifact name -> definition
+			Data:     make(map[string]*artifacts_proto.Artifact),
+			metadata: metadata_manager,
 		},
+		metadata: metadata_manager,
 	}
 }
 
@@ -312,6 +356,10 @@ func NewRepositoryManager(ctx context.Context, wg *sync.WaitGroup,
 
 	// Load all the artifacts in the repository and compile them in the background.
 	self := _newRepositoryManager(config_obj, wg)
+
+	// It is not an error if the metadata file does not exist, just
+	// move on.
+	_ = self.metadata.loadMetadata(ctx, config_obj)
 
 	return self, self.StartWatchingForUpdates(ctx, wg, config_obj)
 }
@@ -347,7 +395,6 @@ func LoadArtifactsFromConfig(
 	return nil
 }
 
-// Load artifacts that are compiled into the binary.
 func LoadBuiltInArtifacts(ctx context.Context,
 	config_obj *config_proto.Config,
 	self *RepositoryManager) error {
@@ -362,7 +409,7 @@ func LoadBuiltInArtifacts(ctx context.Context,
 
 	now := time.Now()
 
-	assets.Init()
+	assets.InitOnce()
 
 	files, err := assets.WalkDirs("", false)
 	if err != nil {

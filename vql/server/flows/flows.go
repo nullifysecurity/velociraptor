@@ -6,6 +6,7 @@ import (
 	"github.com/Velocidex/ordereddict"
 	"www.velocidex.com/golang/velociraptor/acls"
 	"www.velocidex.com/golang/velociraptor/json"
+	"www.velocidex.com/golang/velociraptor/result_sets"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/vql"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
@@ -44,7 +45,7 @@ func (self FlowsPlugin) Call(
 
 		config_obj, ok := vql_subsystem.GetServerConfig(scope)
 		if !ok {
-			scope.Log("Command can only run on the server")
+			scope.Log("flows: Command can only run on the server")
 			return
 		}
 
@@ -72,12 +73,13 @@ func (self FlowsPlugin) Call(
 			return
 		}
 
-		length := uint64(1000)
-		offset := uint64(0)
+		length := int64(1000)
+		offset := int64(0)
 
 		for {
+			options := result_sets.ResultSetOptions{}
 			result, err := launcher.GetFlows(ctx, config_obj,
-				arg.ClientId, true, nil, offset, length)
+				arg.ClientId, options, offset, length)
 			if err != nil {
 				scope.Log("flows: %v", err)
 				return
@@ -95,7 +97,7 @@ func (self FlowsPlugin) Call(
 				}
 			}
 
-			offset += uint64(len(result.Items))
+			offset += int64(len(result.Items))
 		}
 	}()
 
@@ -137,7 +139,7 @@ func (self *CancelFlowFunction) Call(ctx context.Context,
 
 	config_obj, ok := vql_subsystem.GetServerConfig(scope)
 	if !ok {
-		scope.Log("Command can only run on the server")
+		scope.Log("cancel_flow: Command can only run on the server")
 		return vfilter.Null{}
 	}
 
@@ -191,7 +193,7 @@ func (self EnumerateFlowPlugin) Call(
 
 		config_obj, ok := vql_subsystem.GetServerConfig(scope)
 		if !ok {
-			scope.Log("Command can only run on the server")
+			scope.Log("enumerate_flow: Command can only run on the server")
 			return
 		}
 

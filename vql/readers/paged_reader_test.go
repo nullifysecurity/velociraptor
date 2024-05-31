@@ -1,3 +1,4 @@
+//go:build !windows
 // +build !windows
 
 package readers
@@ -34,7 +35,6 @@ type TestSuite struct {
 func (self *TestSuite) SetupTest() {
 	self.scope = vql_subsystem.MakeScope()
 	self.scope.AppendVars(ordereddict.NewDict().
-		Set(vql_subsystem.CACHE_VAR, vql_subsystem.NewScopeCache()).
 		Set(vql_subsystem.ACL_MANAGER_VAR, acl_managers.NullACLManager{}).
 		Set(constants.SCOPE_ROOT, self.scope))
 
@@ -153,7 +153,8 @@ func (self *TestSuite) TestPagedReader() {
 	})
 
 	// No outstanding readers
-	assert.Equal(self.T(), int64(0), self.pool.lru.Size())
+	metrics := self.pool.lru.GetMetrics()
+	assert.Equal(self.T(), int64(0), metrics.Size)
 
 }
 

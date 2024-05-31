@@ -55,6 +55,8 @@ type contextManager struct {
 
 	row_limit  int64
 	byte_limit int64
+
+	dirty bool
 }
 
 func NewCollectionContextManager(
@@ -93,6 +95,7 @@ func NewCollectionContextManager(
 		log_writer: &counterWriter{ResultSetWriter: log_writer},
 		row_limit:  row_limit,
 		byte_limit: byte_limit,
+		dirty:      true,
 	}
 
 	return self, nil
@@ -202,7 +205,7 @@ func (self *contextManager) StartRefresh(wg *sync.WaitGroup) {
 				self.Save()
 				return
 
-			case <-time.After(time.Duration(10) * time.Second):
+			case <-time.After(utils.Jitter(time.Duration(10) * time.Second)):
 				self.Save()
 			}
 		}
@@ -229,6 +232,7 @@ func (self *contextManager) Load() error {
 	}
 
 	self.context = details.Context
+	self.dirty = false
 	return nil
 }
 
@@ -238,6 +242,10 @@ func (self *contextManager) Save() error {
 
 	self.mu.Lock()
 	defer self.mu.Unlock()
+
+	if !self.dirty {
+		return nil
+	}
 
 	launcher, err := services.GetLauncher(self.config_obj)
 	if err != nil {
@@ -274,9 +282,25 @@ func (self *contextManager) Close(ctx context.Context) {
 // the entire flow completion.
 func (self *contextManager) maybeSendCompletionMessage(ctx context.Context) {
 	flow_context := self.GetContext()
-	if flow_context.State == flows_proto.ArtifactCollectorContext_RUNNING {
+	if flow_context.UserNotified ||
+		flow_context.State == flows_proto.ArtifactCollectorContext_RUNNING {
 		return
 	}
+
+	// Remember that we notified this already.
+	self.mu.Lock()
+	self.context.UserNotified = true
+	self.mu.Unlock()
+
+	launcher, err := services.GetLauncher(self.config_obj)
+	if err != nil {
+		return
+	}
+
+	// Write the context synchronously because listeners may be wait
+	// for the messages.
+	launcher.Storage().WriteFlow(
+		ctx, self.config_obj, flow_context, utils.SyncCompleter)
 
 	row := ordereddict.NewDict().
 		Set("Timestamp", utils.GetTime().Now().UTC().Unix()).
@@ -288,10 +312,8 @@ func (self *contextManager) maybeSendCompletionMessage(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	journal.PushRowsToArtifact(ctx, self.config_obj,
-		[]*ordereddict.Dict{row},
-		"System.Flow.Completion", "server", self.session_id,
-	)
+	journal.PushRowsToArtifactAsync(ctx, self.config_obj,
+		row, "System.Flow.Completion")
 }
 
 func (self *contextManager) RunQuery(
@@ -332,8 +354,8 @@ func (self *contextManager) RunQuery(
 	}
 
 	principal := arg.Principal
-	if principal == "" && self.config_obj.Client != nil {
-		principal = self.config_obj.Client.PinnedServerName
+	if principal == "" {
+		return errors.New("Principal must be set")
 	}
 
 	flow_path_manager := paths.NewFlowPathManager("server", self.session_id)
@@ -373,13 +395,33 @@ func (self *contextManager) RunQuery(
 
 	scope.Log("<green>Starting</> query execution.")
 
+	rate := arg.OpsPerSecond
+	cpu_limit := arg.CpuLimit
+	iops_limit := arg.IopsLimit
+
+	throttler := actions.NewThrottler(self.ctx, scope, float64(rate),
+		float64(cpu_limit), float64(iops_limit))
+
+	if arg.ProgressTimeout > 0 {
+		duration := time.Duration(arg.ProgressTimeout) * time.Second
+		throttler = actions.NewProgressThrottler(
+			sub_ctx, scope, cancel, throttler, duration)
+		scope.Log("query: Installing a progress alarm for %v", duration)
+	}
+	scope.SetThrottler(throttler)
+
 	// All the queries will use the same scope. This allows one
 	// query to define functions for the next query in order.
 	for _, query := range arg.Query {
 		query_log := actions.QueryLog.AddQuery(query.VQL)
 
+		// Might not be called until all queries are processed but it
+		// is ok to call Close() multiple times on the query log.
+		defer query_log.Close()
+
 		vql, err := vfilter.Parse(query.VQL)
 		if err != nil {
+			query_log.Close()
 			return err
 		}
 
@@ -389,6 +431,7 @@ func (self *contextManager) RunQuery(
 			// are normally LET queries.
 			for _ = range vql.Eval(sub_ctx, scope) {
 			}
+			query_log.Close()
 			continue
 		}
 

@@ -1,19 +1,19 @@
 /*
-   Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+Velociraptor - Dig Deeper
+Copyright (C) 2019-2024 Rapid7 Inc.
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published
-   by the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package parsers
 
@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/Velocidex/ordereddict"
+	"www.velocidex.com/golang/go-ntfs/parser"
 	ntfs "www.velocidex.com/golang/go-ntfs/parser"
 	"www.velocidex.com/golang/velociraptor/accessors"
 	"www.velocidex.com/golang/velociraptor/accessors/ntfs/readers"
@@ -47,6 +48,7 @@ type NTFSModel struct {
 	*ntfs.NTFSFileInformation
 
 	Device *accessors.OSPath
+	OSPath *accessors.OSPath
 }
 
 type NTFSFunction struct{}
@@ -64,6 +66,7 @@ func (self NTFSFunction) Call(
 	args *ordereddict.Dict) vfilter.Any {
 
 	defer utils.RecoverVQL(scope)
+	defer vql_subsystem.RegisterMonitor("parse_ntfs", args)()
 
 	arg := &NTFSFunctionArgs{}
 	err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
@@ -80,7 +83,7 @@ func (self NTFSFunction) Call(
 	}
 
 	if arg.Inode != "" {
-		mft_idx, _, _, err := ntfs.ParseMFTId(arg.Inode)
+		mft_idx, _, _, _, err := ntfs.ParseMFTId(arg.Inode)
 		if err != nil {
 			scope.Log("parse_ntfs: %v", err)
 			return &vfilter.Null{}
@@ -116,7 +119,34 @@ func (self NTFSFunction) Call(
 		return &vfilter.Null{}
 	}
 
-	return &NTFSModel{NTFSFileInformation: result, Device: arg.Filename}
+	var ospath *accessors.OSPath
+
+	// A Device was given the OSPath should be relative to the device
+	// so it can be opened by the 'ntfs' accessor
+	if arg.Device != "" && arg.Filename != nil {
+		if len(result.Hardlinks) > 0 {
+			ospath = arg.Filename.Append(strings.Split(result.Hardlinks[0], "\\")...)
+		}
+	} else {
+
+		// A filename was given - we just return the OSPath relative
+		// to the root of the filesystem. This can be used to open the
+		// file with the 'raw_ntfs' accessor.
+		if len(result.Hardlinks) > 0 {
+			ospath, _ = accessors.NewWindowsNTFSPath("")
+			ospath.SetPathSpec(&accessors.PathSpec{
+				DelegateAccessor: arg.Accessor,
+				DelegatePath:     arg.Filename.Path(),
+				Path:             result.Hardlinks[0],
+			})
+		}
+	}
+
+	return &NTFSModel{
+		NTFSFileInformation: result,
+		Device:              arg.Filename,
+		OSPath:              ospath,
+	}
 }
 
 type MFTScanPluginArgs struct {
@@ -137,6 +167,7 @@ func (self MFTScanPlugin) Call(
 	go func() {
 		defer close(output_chan)
 		defer utils.RecoverVQL(scope)
+		defer vql_subsystem.RegisterMonitor("parse_mft", args)()
 
 		arg := &MFTScanPluginArgs{}
 		err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
@@ -213,6 +244,7 @@ func (self NTFSI30ScanPlugin) Call(
 	go func() {
 		defer close(output_chan)
 		defer utils.RecoverVQL(scope)
+		defer vql_subsystem.RegisterMonitor("parse_ntfs_i30", args)()
 
 		arg := &NTFSFunctionArgs{}
 		err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
@@ -229,7 +261,7 @@ func (self NTFSI30ScanPlugin) Call(
 		}
 
 		if arg.Inode != "" {
-			mft_idx, _, _, err := ntfs.ParseMFTId(arg.Inode)
+			mft_idx, _, _, _, err := ntfs.ParseMFTId(arg.Inode)
 			if err != nil {
 				scope.Log("parse_ntfs_i30: %v", err)
 				return
@@ -286,6 +318,7 @@ func (self NTFSRangesPlugin) Call(
 	go func() {
 		defer close(output_chan)
 		defer utils.RecoverVQL(scope)
+		defer vql_subsystem.RegisterMonitor("parse_ntfs_ranges", args)()
 
 		arg := &NTFSFunctionArgs{}
 		err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
@@ -304,9 +337,10 @@ func (self NTFSRangesPlugin) Call(
 		attr_type := int64(0)
 		attr_id := int64(0)
 		mft_idx := int64(arg.MFT)
+		stream_name := ""
 
 		if arg.Inode != "" {
-			mft_idx, attr_type, attr_id, err = ntfs.ParseMFTId(arg.Inode)
+			mft_idx, attr_type, attr_id, stream_name, err = ntfs.ParseMFTId(arg.Inode)
 			if err != nil {
 				scope.Log("parse_ntfs_ranges: %v", err)
 				return
@@ -333,13 +367,13 @@ func (self NTFSRangesPlugin) Call(
 		}
 
 		reader, err := ntfs.OpenStream(ntfs_ctx, mft_entry,
-			uint64(attr_type), uint16(attr_id))
+			uint64(attr_type), uint16(attr_id), stream_name)
 		if err != nil {
 			scope.Log("parse_ntfs_ranges: %v", err)
 			return
 		}
 
-		for _, rng := range reader.Ranges() {
+		for _, rng := range parser.DebugRuns(reader, 0) {
 			select {
 			case <-ctx.Done():
 				return

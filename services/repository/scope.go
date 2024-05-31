@@ -30,12 +30,16 @@ func _build(self services.ScopeBuilder, from_scratch bool) vfilter.Scope {
 		env.Set("_SessionId", "")
 	}
 
+	// If the repository is not specified, use the global repository.
 	if self.Repository == nil {
-		manager, _ := services.GetRepositoryManager(self.Config)
-		if manager == nil {
+		manager, err := services.GetRepositoryManager(self.Config)
+		if manager == nil || err != nil {
 			return vfilter.NewScope()
 		}
-		self.Repository, _ = manager.GetGlobalRepository(self.Config)
+		self.Repository, err = manager.GetGlobalRepository(self.Config)
+		if err != nil {
+			return vfilter.NewScope()
+		}
 	}
 
 	var scope vfilter.Scope
@@ -47,8 +51,8 @@ func _build(self services.ScopeBuilder, from_scratch bool) vfilter.Scope {
 
 	scope.SetLogger(self.Logger)
 
-	cache := vql_subsystem.NewScopeCache()
-	env.Set(vql_subsystem.CACHE_VAR, cache)
+	// Make a new fresh cache context.
+	scope.SetContext(vql_subsystem.CACHE_VAR, vql_subsystem.NewScopeCache())
 
 	device_manager := accessors.GetDefaultDeviceManager(
 		self.Config).Copy()
@@ -58,7 +62,7 @@ func _build(self services.ScopeBuilder, from_scratch bool) vfilter.Scope {
 		// Server config contains secrets - they are stored in
 		// a way that VQL can not directly access them but
 		// plugins can get via vql_subsystem.GetServerConfig()
-		cache.Set(constants.SCOPE_SERVER_CONFIG, self.Config)
+		vql_subsystem.CacheSet(scope, constants.SCOPE_SERVER_CONFIG, self.Config)
 
 		if self.Config.Client != nil {
 			env.Set(constants.SCOPE_CONFIG, self.Config.Client)
@@ -92,7 +96,12 @@ func _build(self services.ScopeBuilder, from_scratch bool) vfilter.Scope {
 	scope.SetExplainer(explain.NewLoggingExplainer(scope))
 
 	artifact_plugin := NewArtifactRepositoryPlugin(self.Repository, self.Config)
-	env.Set("Artifact", artifact_plugin)
+	// Pass the repository into the scope env. Plugins that need to
+	// consult the repository should always get it from this variable
+	// so it can be subsistuted with an isolate repository for
+	// clients.
+	env.Set("Artifact", artifact_plugin).
+		Set(constants.SCOPE_REPOSITORY, self.Repository)
 
 	scope.AppendVars(env).AddProtocolImpl(
 		_ArtifactRepositoryPluginAssociativeProtocol{})

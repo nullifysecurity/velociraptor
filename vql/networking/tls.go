@@ -53,7 +53,7 @@ func normalizeThumbPrints(thumbprints []string) []string {
 // to be able to trust our own server. Our own server is signed by our
 // own CA and also may have a different common name (not related to
 // DNS). For example, in self signed mode, the server certificate is
-// signed for VelociraptorServer but may be served over
+// signed for "VelociraptorServer" but may be served over
 // "localhost". Using the default TLS configuration this connection
 // will be rejected.
 
@@ -74,6 +74,8 @@ func customVerifyConnection(
 		Intermediates: x509.NewCertPool(),
 		Roots:         x509.NewCertPool(),
 	}
+
+	// Add a single root - the Velociraptor CA is the one we trust the most!
 	if config_obj != nil {
 		private_opts.Roots.AppendCertsFromPEM([]byte(config_obj.CaCertificate))
 	}
@@ -214,6 +216,23 @@ func GetTlsConfig(config_obj *config_proto.ClientConfig, extra_roots string) (*t
 		// cert in VerifyConnection
 		InsecureSkipVerify: true,
 		VerifyConnection:   customVerifyConnection(CA_Pool, config_obj),
+	}
+
+	// Automatically add any client certificates specified in the
+	// config file. They will only be used when requested by the
+	// server. NOTE: This could allow for fingerprinting the client by
+	// MITM... This is necessary when connecting back to a mTLS
+	// protected server to download tools.
+	if config_obj.Crypto != nil &&
+		config_obj.Crypto.ClientCertificate != "" &&
+		config_obj.Crypto.ClientCertificatePrivateKey != "" {
+		cert, err := tls.X509KeyPair(
+			[]byte(config_obj.Crypto.ClientCertificate),
+			[]byte(config_obj.Crypto.ClientCertificatePrivateKey))
+		if err != nil {
+			return nil, err
+		}
+		result.Certificates = []tls.Certificate{cert}
 	}
 
 	return result, nil

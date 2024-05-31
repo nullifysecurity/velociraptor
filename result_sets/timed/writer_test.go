@@ -77,7 +77,9 @@ func (self *TimedResultSetTestSuite) TestTimedResultSetWriting() {
 	completion_result := []string{}
 
 	now := time.Unix(1587800000, 0)
-	clock := &utils.MockClock{MockNow: now}
+	clock := utils.NewMockClock(now)
+	closer := utils.MockTime(clock)
+	defer closer()
 
 	// Start off by writing some events on a queue.
 	path_manager, err := artifacts.NewArtifactPathManager(
@@ -86,7 +88,6 @@ func (self *TimedResultSetTestSuite) TestTimedResultSetWriting() {
 		self.flow_id,
 		"Windows.Events.ProcessCreation")
 	assert.NoError(self.T(), err)
-	path_manager.Clock = clock
 
 	file_store_factory := file_store.GetFileStore(self.ConfigObj)
 	writer, err := timed.NewTimedResultSetWriter(
@@ -97,16 +98,14 @@ func (self *TimedResultSetTestSuite) TestTimedResultSetWriting() {
 		})
 	assert.NoError(self.T(), err)
 
-	writer.(*timed.TimedResultSetWriterImpl).Clock = clock
-
 	// Push an event every hour for 48 hours.
 	for i := int64(0); i < 50; i++ {
 		// Advance the clock by 1 hour.
 		now := 1587800000 + 10000*i
-		clock.MockNow = time.Unix(now, 0).UTC()
+		clock.Set(time.Unix(now, 0).UTC())
 
 		writer.Write(ordereddict.NewDict().
-			Set("Time", clock.MockNow).
+			Set("Time", clock.Now()).
 			Set("Now", now))
 
 		// Force the writer to flush to disk - next write will open
@@ -154,7 +153,9 @@ func (self *TimedResultSetTestSuite) TestTimedResultSetWritingJsonl() {
 	completion_result := []string{}
 
 	now := time.Unix(1587800000, 0)
-	clock := &utils.MockClock{MockNow: now}
+	clock := utils.NewMockClock(now)
+	closer := utils.MockTime(clock)
+	defer closer()
 
 	// Start off by writing some events on a queue.
 	path_manager, err := artifacts.NewArtifactPathManager(
@@ -163,7 +164,6 @@ func (self *TimedResultSetTestSuite) TestTimedResultSetWritingJsonl() {
 		self.flow_id,
 		"Windows.Events.ProcessCreation")
 	assert.NoError(self.T(), err)
-	path_manager.Clock = clock
 
 	file_store_factory := file_store.GetFileStore(self.ConfigObj)
 	writer, err := timed.NewTimedResultSetWriter(
@@ -174,19 +174,17 @@ func (self *TimedResultSetTestSuite) TestTimedResultSetWritingJsonl() {
 		})
 	assert.NoError(self.T(), err)
 
-	writer.(*timed.TimedResultSetWriterImpl).Clock = clock
-
 	// Push an event every hour for 48 hours.
 	for i := int64(0); i < 50; i++ {
 		// Advance the clock by 1 hour.
 		now := 1587800000 + 10000*i
-		clock.MockNow = time.Unix(now, 0).UTC()
+		clock.Set(time.Unix(now, 0).UTC())
 
 		// For performance critical sections it is sometimes easier to
 		// build the jsonl by hand.
 		writer.WriteJSONL([]byte(
 			fmt.Sprintf("{\"Time\":%q,\"Now\":%d}\n",
-				clock.MockNow.UTC().Format(time.RFC3339), now)), 1)
+				clock.Now().UTC().Format(time.RFC3339), now)), 1)
 
 		// Force the writer to flush to disk - next write will open
 		// the file and append data to the end.
@@ -233,7 +231,9 @@ func (self *TimedResultSetTestSuite) TestTimedResultSetWritingNoFlushing() {
 	completion_result := []string{}
 
 	now := time.Unix(1587800000, 0)
-	clock := &utils.MockClock{MockNow: now}
+	clock := utils.NewMockClock(now)
+	closer := utils.MockTime(clock)
+	defer closer()
 
 	// Start off by writing some events on a queue.
 	path_manager, err := artifacts.NewArtifactPathManager(
@@ -242,7 +242,6 @@ func (self *TimedResultSetTestSuite) TestTimedResultSetWritingNoFlushing() {
 		self.flow_id,
 		"Windows.Events.ProcessCreation")
 	assert.NoError(self.T(), err)
-	path_manager.Clock = clock
 
 	file_store_factory := file_store.GetFileStore(self.ConfigObj)
 	writer, err := timed.NewTimedResultSetWriter(
@@ -253,16 +252,14 @@ func (self *TimedResultSetTestSuite) TestTimedResultSetWritingNoFlushing() {
 		})
 	assert.NoError(self.T(), err)
 
-	writer.(*timed.TimedResultSetWriterImpl).Clock = clock
-
 	// Push an event every hour for 48 hours.
 	for i := int64(0); i < 50; i++ {
 		// Advance the clock by 1 hour.
 		now := 1587800000 + 10000*i
-		clock.MockNow = time.Unix(now, 0).UTC()
+		clock.Set(time.Unix(now, 0).UTC())
 
 		writer.Write(ordereddict.NewDict().
-			Set("Time", clock.MockNow).
+			Set("Time", clock.Now()).
 			Set("Now", now))
 	}
 

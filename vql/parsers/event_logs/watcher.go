@@ -2,6 +2,7 @@ package event_logs
 
 import (
 	"context"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"www.velocidex.com/golang/velociraptor/services/repository"
 	"www.velocidex.com/golang/velociraptor/utils"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
+	"www.velocidex.com/golang/velociraptor/vql/functions"
 	"www.velocidex.com/golang/vfilter"
 )
 
@@ -51,14 +53,17 @@ func (self *EventLogWatcherService) Register(
 		output_chan: output_chan,
 		scope:       scope}
 
+	frequency := vql_subsystem.GetIntFromRow(
+		scope, scope, constants.EVTX_FREQUENCY)
+	if frequency == 0 {
+		frequency = 15
+	}
+
 	key := filename.String() + accessor
 	registration, pres := self.registrations[key]
 	if !pres {
 		registration = []*Handle{}
 		self.registrations[key] = registration
-
-		frequency := vql_subsystem.GetIntFromRow(
-			scope, scope, constants.EVTX_FREQUENCY)
 
 		// Create a scope with a completely different lifespan since
 		// it may outlive this query (if another query starts watching
@@ -76,7 +81,7 @@ func (self *EventLogWatcherService) Register(
 	registration = append(registration, handle)
 	self.registrations[key] = registration
 
-	scope.Log("Registering watcher for %v", filename)
+	scope.Log("Registering watcher for %v with frequency %v", filename, frequency)
 
 	return cancel
 }
@@ -89,7 +94,6 @@ func (self *EventLogWatcherService) StartMonitoring(
 	accessor_name string, frequency uint64) {
 	defer scope.Close()
 
-	scope.Log("StartMonitoring")
 	defer utils.CheckForPanic("StartMonitoring")
 
 	// By default check every 15 seconds. Event logs are not flushed
@@ -97,6 +101,9 @@ func (self *EventLogWatcherService) StartMonitoring(
 	if frequency == 0 {
 		frequency = 15
 	}
+
+	// Add some jitter to ensure evtx parsing is not synchronized.
+	frequency = uint64(rand.Intn(int(frequency)*2/10)) + frequency
 
 	// A resolver for messages
 	resolver, _ := evtx.GetNativeResolver()
@@ -206,8 +213,9 @@ func (self *EventLogWatcherService) monitorOnce(
 	fd, err := accessor.OpenWithOSPath(filename)
 	if err != nil {
 		for _, handle := range handles {
-			handle.scope.Log("Unable to open file %s: %v",
-				filename, err)
+			functions.DeduplicatedLog(
+				context.Background(), handle.scope,
+				"Unable to open file %v: %v", filename, err)
 		}
 		return 0
 	}

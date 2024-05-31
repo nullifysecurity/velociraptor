@@ -15,12 +15,33 @@ const (
 )
 
 type MultiGetSubjectRequest struct {
-	Path    api.DSPathSpec
-	Message proto.Message
-	Err     error
+	mu      sync.Mutex
+	message proto.Message
+
+	Path api.DSPathSpec
+	Err  error
 
 	// Free form data that goes with the request.
 	Data interface{}
+}
+
+// Return a copy so there is no race
+func (self *MultiGetSubjectRequest) Message() proto.Message {
+	return proto.Clone(self.message)
+}
+
+func (self *MultiGetSubjectRequest) Error() error {
+	self.mu.Lock()
+	defer self.mu.Unlock()
+	return self.Err
+}
+
+func NewMultiGetSubjectRequest(message proto.Message, path api.DSPathSpec, data interface{}) *MultiGetSubjectRequest {
+	return &MultiGetSubjectRequest{
+		message: proto.Clone(message),
+		Path:    path,
+		Data:    data,
+	}
 }
 
 // A helper function to read multipe subjects at the same time.
@@ -28,26 +49,23 @@ func MultiGetSubject(
 	config_obj *config_proto.Config,
 	requests []*MultiGetSubjectRequest) error {
 
-	var mu sync.Mutex
-
 	db, err := GetDB(config_obj)
 	if err != nil {
 		return err
 	}
 
 	var wg sync.WaitGroup
-	mu.Lock()
 	for _, request := range requests {
 		wg.Add(1)
+
 		go func(request *MultiGetSubjectRequest) {
 			defer wg.Done()
 
-			mu.Lock()
-			defer mu.Unlock()
-			request.Err = db.GetSubject(config_obj, request.Path, request.Message)
+			request.mu.Lock()
+			defer request.mu.Unlock()
+			request.Err = db.GetSubject(config_obj, request.Path, request.message)
 		}(request)
 	}
-	mu.Unlock()
 
 	wg.Wait()
 	return nil
@@ -124,4 +142,29 @@ func GetImplementationName(
 	}
 
 	return config_obj.Datastore.Implementation, nil
+}
+
+type Flusher interface {
+	Flush()
+}
+
+func FlushDatastore(config_obj *config_proto.Config) error {
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	db, err := GetDB(config_obj)
+	if err != nil {
+		return err
+	}
+
+	flusher, ok := db.(Flusher)
+	if ok {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			flusher.Flush()
+		}()
+	}
+
+	return nil
 }

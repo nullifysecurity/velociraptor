@@ -128,15 +128,16 @@ func (self *CollectorTestSuite) addArtifactDefinitions() {
 	fd.Write([]byte(`name: Custom.TestArtifactDependent
 tools:
   - name: MyTool
+    version: 1
   - name: MyDataFile
 
 sources:
  - query: |
-     LET binary <= SELECT FullPath, Name
+     LET binary <= SELECT OSPath, Name
          FROM Artifact.Generic.Utils.FetchBinary(
               ToolName="MyTool", SleepDuration='0')
 
-     LET data_file <= SELECT FullPath, Name
+     LET data_file <= SELECT OSPath, Name
          FROM Artifact.Generic.Utils.FetchBinary(
               ToolName="MyDataFile", SleepDuration='0',
               IsExecutable=FALSE)
@@ -144,10 +145,10 @@ sources:
      LET _ <= sleep(time=1)
 
      SELECT "Foobar", Stdout, binary[0].Name,
-            data_file[0].FullPath AS DataFilePath,
-            data_file[0].FullPath =~ ".yar$" AS HasYarExtension,
-            read_file(filename=data_file[0].FullPath) AS Data
-     FROM execve(argv=[binary[0].FullPath, "artifacts", "list"])
+            data_file[0].OSPath AS DataFilePath,
+            data_file[0].OSPath =~ ".yar$" AS HasYarExtension,
+            read_file(filename=data_file[0].OSPath) AS Data
+     FROM execve(argv=[binary[0].OSPath, "artifacts", "list"])
 `))
 	fd.Close()
 
@@ -184,20 +185,11 @@ sources:
 func (self *CollectorTestSuite) uploadToolDefinitions() {
 	t := self.T()
 
-	// Upload a small file (the config file) for all the other
-	// architectures.
-	for _, os_name := range []string{"Windows", "Windows_x86", "Linux", "Darwin"} {
-		cmd := exec.Command(self.binary, "--config", self.config_file,
-			"tools", "upload", "--name", "Velociraptor"+os_name,
-			self.config_file)
-		out, err := cmd.CombinedOutput()
-		fmt.Println(string(out))
-		require.NoError(t, err)
-	}
-
-	// Upload the real thing for the architecture we are running on.
+	// Upload the real binary for the architecture we are running on.
 	cmd := exec.Command(self.binary, "--config", self.config_file,
-		"tools", "upload", "--name", "Velociraptor"+self.OS_TYPE, self.binary)
+		"tools", "upload", "--name", "Velociraptor"+self.OS_TYPE,
+		"--tool_version", constants.VERSION,
+		self.binary)
 	out, err := cmd.CombinedOutput()
 	fmt.Println(string(out))
 	require.NoError(t, err)
@@ -211,7 +203,8 @@ func (self *CollectorTestSuite) uploadToolDefinitions() {
 	// Add ourselves again as a tool called MyTool - the artifact will
 	// call it.
 	cmd = exec.Command(self.binary, "--config", self.config_file,
-		"tools", "upload", "--name", "MyTool", self.binary)
+		"tools", "upload", "--name", "MyTool",
+		"--tool_version", "1", self.binary)
 	out, err = cmd.CombinedOutput()
 	fmt.Println(string(out))
 	require.NoError(t, err)

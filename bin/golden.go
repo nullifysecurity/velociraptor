@@ -1,19 +1,19 @@
 /*
-   Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+Velociraptor - Dig Deeper
+Copyright (C) 2019-2024 Rapid7 Inc.
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published
-   by the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package main
 
@@ -35,20 +35,24 @@ import (
 	"github.com/Velocidex/yaml/v2"
 	errors "github.com/go-errors/errors"
 	"github.com/sergi/go-diff/diffmatchpatch"
-	"github.com/shirou/gopsutil/v3/process"
 	"www.velocidex.com/golang/velociraptor/actions"
 	actions_proto "www.velocidex.com/golang/velociraptor/actions/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/constants"
+	"www.velocidex.com/golang/velociraptor/crypto/storage"
+	crypto_utils "www.velocidex.com/golang/velociraptor/crypto/utils"
 	"www.velocidex.com/golang/velociraptor/file_store"
+	"www.velocidex.com/golang/velociraptor/json"
 	logging "www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/paths"
 	"www.velocidex.com/golang/velociraptor/reporting"
 	"www.velocidex.com/golang/velociraptor/services"
+	"www.velocidex.com/golang/velociraptor/services/writeback"
 	"www.velocidex.com/golang/velociraptor/startup"
 	"www.velocidex.com/golang/velociraptor/utils"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/velociraptor/vql/acl_managers"
+	"www.velocidex.com/golang/velociraptor/vql/psutils"
 	"www.velocidex.com/golang/velociraptor/vql/remapping"
 	vfilter "www.velocidex.com/golang/vfilter"
 	"www.velocidex.com/golang/vfilter/arg_parser"
@@ -81,7 +85,9 @@ var (
 		"(?i)Symbol .+ not found",
 		"(?i)Field .+ Expecting a .+ arg type, not",
 		"(?i)Artifact .+ not found",
+		"(?i)Order by column .+ not present in row",
 		"PANIC runtime error:",
+		"Extra unrecognized arg",
 	}
 )
 
@@ -127,12 +133,13 @@ func makeCtxWithTimeout(
 				// the goroutines and mutex and hard exit.
 			case <-time.After(time.Second):
 				if time.Now().Before(deadline) {
-					proc, _ := process.NewProcess(int32(os.Getpid()))
-					total_time, _ := proc.Percent(0)
-					memory, _ := proc.MemoryInfo()
+					pid := int32(os.Getpid())
+					total_time, _ := psutils.TimesWithContext(ctx, pid)
+					memory, _ := psutils.MemoryInfoWithContext(ctx, pid)
 
 					fmt.Printf("Not time to fire yet %v %v %v\n",
-						time.Now(), total_time, memory)
+						time.Now(), json.MustMarshalString(total_time),
+						json.MustMarshalString(memory))
 					continue
 				}
 
@@ -166,6 +173,13 @@ func makeCtxWithTimeout(
 func runTest(fixture *testFixture, sm *services.Service,
 	config_obj *config_proto.Config) (string, error) {
 
+	gen := utils.IncrementalIdGenerator(0)
+	utils.SetIdGenerator(&gen)
+
+	// Freeze the time for consistent golden tests Monday, May 31, 2020 3:28:05 PM
+	closer := utils.MockTime(utils.NewMockClock(time.Unix(1590938885, 10)))
+	defer closer()
+
 	ctx := sm.Ctx
 
 	// Limit each test for maxmimum time
@@ -174,6 +188,17 @@ func runTest(fixture *testFixture, sm *services.Service,
 		defer cancel()
 
 		ctx = sub_ctx
+	}
+
+	// Set this to emulate a working client.
+	storage.SetCurrentServerPem([]byte(config_obj.Frontend.Certificate))
+
+	writeback_service := writeback.GetWritebackService()
+	writeback_service.LoadWriteback(config_obj)
+
+	err := crypto_utils.VerifyConfig(config_obj)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	// Create an output container.
@@ -197,6 +222,7 @@ func runTest(fixture *testFixture, sm *services.Service,
 		Uploader:   container,
 		Env: ordereddict.NewDict().
 			Set("GoldenOutput", tmpfile.Name()).
+			Set("config", config_obj.Client).
 			Set("_SessionId", "F.Golden").
 			Set(constants.SCOPE_MOCK, &remapping.MockingScopeContext{}),
 	}
@@ -261,6 +287,9 @@ func runTest(fixture *testFixture, sm *services.Service,
 }
 
 func doGolden() error {
+	closer := utils.MockTime(utils.NewMockClock(time.Unix(1590938885, 10)))
+	defer closer()
+
 	logging.DisableLogging()
 
 	vql_subsystem.RegisterPlugin(&MemoryLogPlugin{})
@@ -544,7 +573,7 @@ func (self MockTimeFunciton) Call(ctx context.Context,
 		return &vfilter.Null{}
 	}
 
-	clock := &utils.MockClock{time.Unix(arg.Now, 0)}
+	clock := utils.NewMockClock(time.Unix(arg.Now, 0))
 	cancel := utils.MockTime(clock)
 	err = vql_subsystem.GetRootScope(scope).AddDestructor(cancel)
 	if err != nil {

@@ -22,6 +22,7 @@ import (
 
 	"github.com/Velocidex/ordereddict"
 	"github.com/Velocidex/ttlcache/v2"
+	"www.velocidex.com/golang/velociraptor/services/debug"
 	"www.velocidex.com/golang/velociraptor/utils"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/vfilter"
@@ -41,6 +42,10 @@ var (
 func GetGlobalTracker() IProcessTracker {
 	clock_mu.Lock()
 	defer clock_mu.Unlock()
+
+	if g_tracker == nil {
+		g_tracker = &DummyProcessTracker{}
+	}
 
 	return g_tracker
 }
@@ -388,13 +393,16 @@ func (self *ProcessTracker) CallChain(
 	}
 }
 
-func NewProcessTracker(max_size int) *ProcessTracker {
+func NewProcessTracker(scope vfilter.Scope, max_size int) *ProcessTracker {
 	result := &ProcessTracker{
 		lookup:      ttlcache.NewCache(),
 		enrichments: ordereddict.NewDict(),
 	}
 
 	result.lookup.SetCacheSizeLimit(max_size)
+	scope.AddDestructor(func() {
+		result.lookup.Close()
+	})
 
 	return result
 }
@@ -423,6 +431,8 @@ func (self _InstallProcessTracker) Call(ctx context.Context,
 	scope vfilter.Scope,
 	args *ordereddict.Dict) vfilter.Any {
 
+	defer vql_subsystem.RegisterMonitor("process_tracker", args)()
+
 	arg := &_InstallProcessTrackerArgs{}
 
 	err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
@@ -440,7 +450,7 @@ func (self _InstallProcessTracker) Call(ctx context.Context,
 		max_size = 10000
 	}
 
-	tracker := NewProcessTracker(int(max_size))
+	tracker := NewProcessTracker(scope, int(max_size))
 
 	// Any any enrichments to the tracker.
 	for _, enrichment := range arg.Enrichments {
@@ -510,4 +520,15 @@ func (self *_InstallProcessTracker) Info(scope vfilter.Scope, type_map *vfilter.
 
 func init() {
 	vql_subsystem.RegisterFunction(&_InstallProcessTracker{})
+	debug.RegisterProfileWriter(debug.ProfileWriterInfo{
+		Name:        "process_tracker",
+		Description: "Report process tracker stats",
+		ProfileWriter: func(ctx context.Context,
+			scope vfilter.Scope, output_chan chan vfilter.Row) {
+			output_chan <- ordereddict.NewDict().
+				Set("Type", "process_tracker").
+				Set("Line", GetGlobalTracker().Stats())
+		},
+	})
+
 }

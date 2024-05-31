@@ -1,8 +1,9 @@
+//go:build server_vql
 // +build server_vql
 
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+   Copyright (C) 2019-2024 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -67,7 +68,7 @@ func (self ClientsPlugin) Call(
 
 		config_obj, ok := vql_subsystem.GetServerConfig(scope)
 		if !ok {
-			scope.Log("Command can only run on the server")
+			scope.Log("clients: Command can only run on the server")
 			return
 		}
 
@@ -160,7 +161,7 @@ func (self *ClientInfoFunction) Call(ctx context.Context,
 
 	config_obj, ok := vql_subsystem.GetServerConfig(scope)
 	if !ok {
-		scope.Log("Command can only run on the server")
+		scope.Log("client_info: Command can only run on the server")
 		return vfilter.Null{}
 	}
 

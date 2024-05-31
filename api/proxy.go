@@ -1,25 +1,26 @@
 /*
-   Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+Velociraptor - Dig Deeper
+Copyright (C) 2019-2024 Rapid7 Inc.
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published
-   by the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package api
 
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -34,12 +35,14 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"www.velocidex.com/golang/velociraptor/api/authenticators"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
-	utils "www.velocidex.com/golang/velociraptor/api/utils"
+	api_utils "www.velocidex.com/golang/velociraptor/api/utils"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/constants"
 	crypto_utils "www.velocidex.com/golang/velociraptor/crypto/utils"
 	"www.velocidex.com/golang/velociraptor/grpc_client"
 	"www.velocidex.com/golang/velociraptor/logging"
+	"www.velocidex.com/golang/velociraptor/server"
+	"www.velocidex.com/golang/velociraptor/utils"
 )
 
 // A Mux for the reverse proxy feature.
@@ -102,7 +105,9 @@ func AddProxyMux(config_obj *config_proto.Config, mux *http.ServeMux) error {
 // Prepares a mux for the GUI by adding handlers required by the GUI.
 func PrepareGUIMux(
 	ctx context.Context,
-	config_obj *config_proto.Config, mux *http.ServeMux) (http.Handler, error) {
+	config_obj *config_proto.Config,
+	server_obj *server.Server,
+	mux *http.ServeMux) (http.Handler, error) {
 	if config_obj.GUI == nil {
 		return nil, errors.New("GUI not configured")
 	}
@@ -121,6 +126,9 @@ func PrepareGUIMux(
 	if err != nil {
 		return nil, err
 	}
+	if config_obj.GUI != nil && config_obj.GUI.Authenticator != nil {
+		server_obj.Info("GUI will use the %v authenticator", config_obj.GUI.Authenticator.Type)
+	}
 
 	// Add the authenticator specific handlers.
 	err = auther.AddHandlers(mux)
@@ -134,53 +142,54 @@ func PrepareGUIMux(
 		return nil, err
 	}
 
-	base := utils.GetBasePath(config_obj)
-	mux.Handle(utils.Join(base, "/api/"), csrfProtect(config_obj,
-		auther.AuthenticateUserHandler(h)))
-
-	mux.Handle(utils.Join(base, "/api/v1/DownloadTable"),
+	base := api_utils.GetBasePath(config_obj)
+	mux.Handle(api_utils.Join(base, "/api/"), ipFilter(config_obj,
 		csrfProtect(config_obj,
-			auther.AuthenticateUserHandler(downloadTable())))
+			auther.AuthenticateUserHandler(h))))
 
-	mux.Handle(utils.Join(base, "/api/v1/DownloadVFSFile"),
-		csrfProtect(config_obj,
-			auther.AuthenticateUserHandler(vfsFileDownloadHandler())))
+	mux.Handle(api_utils.Join(base, "/api/v1/DownloadTable"),
+		ipFilter(config_obj, csrfProtect(config_obj,
+			auther.AuthenticateUserHandler(downloadTable()))))
 
-	mux.Handle(utils.Join(base, "/api/v1/UploadTool"),
-		csrfProtect(config_obj,
-			auther.AuthenticateUserHandler(toolUploadHandler())))
+	mux.Handle(api_utils.Join(base, "/api/v1/DownloadVFSFile"),
+		ipFilter(config_obj, csrfProtect(config_obj,
+			auther.AuthenticateUserHandler(vfsFileDownloadHandler()))))
 
-	mux.Handle(utils.Join(base, "/api/v1/UploadFormFile"),
-		csrfProtect(config_obj,
-			auther.AuthenticateUserHandler(formUploadHandler())))
+	mux.Handle(api_utils.Join(base, "/api/v1/UploadTool"),
+		ipFilter(config_obj, csrfProtect(config_obj,
+			auther.AuthenticateUserHandler(toolUploadHandler()))))
+
+	mux.Handle(api_utils.Join(base, "/api/v1/UploadFormFile"),
+		ipFilter(config_obj, csrfProtect(config_obj,
+			auther.AuthenticateUserHandler(formUploadHandler()))))
 
 	// Serve prepared zip files.
-	mux.Handle(utils.Join(base, "/downloads/"),
-		csrfProtect(config_obj,
+	mux.Handle(api_utils.Join(base, "/downloads/"),
+		ipFilter(config_obj, csrfProtect(config_obj,
 			auther.AuthenticateUserHandler(
 				http.StripPrefix(base,
-					downloadFileStore([]string{"downloads"})))))
+					downloadFileStore([]string{"downloads"}))))))
 
 	// Serve notebook items
-	mux.Handle(utils.Join(base, "/notebooks/"),
-		csrfProtect(config_obj,
+	mux.Handle(api_utils.Join(base, "/notebooks/"),
+		ipFilter(config_obj, csrfProtect(config_obj,
 			auther.AuthenticateUserHandler(
 				http.StripPrefix(base,
-					downloadFileStore([]string{"notebooks"})))))
+					downloadFileStore([]string{"notebooks"}))))))
 
 	// Serve files from hunt notebooks
-	mux.Handle(utils.Join(base, "/hunts/"),
-		csrfProtect(config_obj,
+	mux.Handle(api_utils.Join(base, "/hunts/"),
+		ipFilter(config_obj, csrfProtect(config_obj,
 			auther.AuthenticateUserHandler(
 				http.StripPrefix(base,
-					downloadFileStore([]string{"hunts"})))))
+					downloadFileStore([]string{"hunts"}))))))
 
 	// Serve files from client notebooks
-	mux.Handle(utils.Join(base, "/clients/"),
-		csrfProtect(config_obj,
+	mux.Handle(api_utils.Join(base, "/clients/"),
+		ipFilter(config_obj, csrfProtect(config_obj,
 			auther.AuthenticateUserHandler(
 				http.StripPrefix(base,
-					downloadFileStore([]string{"clients"})))))
+					downloadFileStore([]string{"clients"}))))))
 
 	// Assets etc do not need auth.
 	install_static_assets(config_obj, mux)
@@ -195,20 +204,23 @@ func PrepareGUIMux(
 	if err != nil {
 		return nil, err
 	}
-	mux.Handle(utils.Join(base, "/app/index.html"),
-		csrfProtect(config_obj, auther.AuthenticateUserHandler(h)))
+	mux.Handle(api_utils.Join(base, "/app/index.html"),
+		ipFilter(config_obj,
+			csrfProtect(config_obj, auther.AuthenticateUserHandler(h))))
 
 	// Redirect everything else to the app
-	mux.Handle(utils.GetBaseDirectory(config_obj),
+	mux.Handle(api_utils.GetBaseDirectory(config_obj),
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.Redirect(w, r, utils.Join(base, "/app/index.html"), 302)
+			http.Redirect(w, r, api_utils.Join(base, "/app/index.html"), 302)
 		}))
 
 	return mux, nil
 }
 
 // An api handler which connects to the gRPC service (i.e. it is a
-// gRPC client).
+// gRPC client). This is used by the gRPC gateway to relay REST calls
+// to the gRPC API. This connection must be identified as the gateway
+// identity.
 func GetAPIHandler(
 	ctx context.Context,
 	config_obj *config_proto.Config) (http.Handler, error) {
@@ -272,14 +284,17 @@ func GetAPIHandler(
 	}
 
 	gw_name := crypto_utils.GetSubjectName(gw_cert)
-	if gw_name != config_obj.API.PinnedGwName {
-		return nil, errors.New("GUI gRPC proxy Certificate is not correct")
+	if gw_name != utils.GetGatewayName(config_obj) {
+		return nil, fmt.Errorf(
+			"GUI gRPC proxy Certificate is not correct: %v", gw_name)
 	}
 
+	// The API server's TLS address is pinned to the frontend's
+	// certificate. We must only connect to the real API server.
 	creds := credentials.NewTLS(&tls.Config{
 		Certificates: []tls.Certificate{cert},
 		RootCAs:      CA_Pool,
-		ServerName:   config_obj.Client.PinnedServerName,
+		ServerName:   utils.GetSuperuserName(config_obj),
 	})
 
 	opts := []grpc.DialOption{
@@ -293,10 +308,15 @@ func GetAPIHandler(
 		return nil, err
 	}
 
-	base := utils.GetBasePath(config_obj)
+	base := api_utils.GetBasePath(config_obj)
 	reverse_proxy_mux := http.NewServeMux()
-	reverse_proxy_mux.Handle(utils.Join(base, "/api/v1/"),
+	reverse_proxy_mux.Handle(api_utils.Join(base, "/api/v1/"),
 		http.StripPrefix(base, grpc_proxy_mux))
 
 	return reverse_proxy_mux, nil
+}
+
+func ipFilter(config_obj *config_proto.Config,
+	parent http.Handler) http.Handler {
+	return authenticators.IpFilter(config_obj, parent)
 }

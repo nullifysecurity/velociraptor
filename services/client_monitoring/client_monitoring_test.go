@@ -94,6 +94,14 @@ sources:
 
 	assert.NoError(self.T(), err)
 
+	client_info_manager, err := services.GetClientInfoManager(self.ConfigObj)
+	assert.NoError(self.T(), err)
+
+	client_info_manager.Set(self.Ctx, &services.ClientInfo{
+		actions_proto.ClientInfo{
+			ClientId: self.client_id,
+		},
+	})
 }
 
 // Check that monitoring tables eventually follow when artifact
@@ -470,7 +478,7 @@ func extractArtifacts(args *actions_proto.VQLEventTable) []string {
 
 // Check that labels are properly populated from the index.
 func (self *ClientMonitoringTestSuite) TestClientMonitoring() {
-	current_clock := &utils.MockClock{MockNow: time.Unix(10, 0)}
+	current_clock := utils.NewMockClock(time.Unix(10, 0))
 
 	labeler := services.GetLabeler(self.ConfigObj)
 	labeler.(*labels.Labeler).SetClock(current_clock)
@@ -503,13 +511,13 @@ func (self *ClientMonitoringTestSuite) TestClientMonitoring() {
 		self.client_id, uint64(10000000000)))
 
 	// Some time later we label the client.
-	current_clock.MockNow = time.Unix(20, 0)
-	labeler.SetClientLabel(context.Background(), self.ConfigObj, self.client_id, "Foobar")
+	current_clock.Set(time.Unix(20, 0))
+	labeler.SetClientLabel(self.Ctx, self.ConfigObj, self.client_id, "Foobar")
 
 	// Client will now be required to update its event table to
 	// make sure the new label does not apply.
 	assert.True(self.T(), manager.CheckClientEventsVersion(
-		context.Background(), self.ConfigObj,
+		self.Ctx, self.ConfigObj,
 		self.client_id, uint64(10000000000)))
 
 }

@@ -35,7 +35,8 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
      "Id": 0,
      "Inode": "37-16-0",
      "Size": 72,
-     "Name": ""
+     "Name": "",
+     "Resident": true
     },
     {
      "Type": "$FILE_NAME",
@@ -43,7 +44,8 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
      "Id": 2,
      "Inode": "37-48-2",
      "Size": 98,
-     "Name": ""
+     "Name": "",
+     "Resident": true
     },
     {
      "Type": "$DATA",
@@ -51,7 +53,8 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
      "Id": 1,
      "Inode": "37-128-1",
      "Size": 14,
-     "Name": ""
+     "Name": "",
+     "Resident": true
     },
     {
      "Type": "$EA_INFORMATION",
@@ -59,7 +62,8 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
      "Id": 3,
      "Inode": "37-208-3",
      "Size": 8,
-     "Name": ""
+     "Name": "",
+     "Resident": true
     },
     {
      "Type": "$EA",
@@ -67,13 +71,15 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
      "Id": 4,
      "Inode": "37-224-4",
      "Size": 92,
-     "Name": ""
+     "Name": "",
+     "Resident": true
     }
    ],
    "Hardlinks": [
     "another_file.txt"
    ],
-   "Device": "\\\\.\\C:"
+   "Device": "\\\\.\\C:",
+   "OSPath": "\\\\.\\C:\\another_file.txt"
   },
   "EA": {
    "Name": "SECOND",
@@ -87,7 +93,8 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
    "Id": 4,
    "Inode": "37-224-4",
    "Size": 92,
-   "Name": ""
+   "Name": "",
+   "Resident": true
   },
   "_Source": "Windows.NTFS.ExtendedAttributes"
  },
@@ -127,7 +134,8 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
      "Id": 0,
      "Inode": "37-16-0",
      "Size": 72,
-     "Name": ""
+     "Name": "",
+     "Resident": true
     },
     {
      "Type": "$FILE_NAME",
@@ -135,7 +143,8 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
      "Id": 2,
      "Inode": "37-48-2",
      "Size": 98,
-     "Name": ""
+     "Name": "",
+     "Resident": true
     },
     {
      "Type": "$DATA",
@@ -143,7 +152,8 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
      "Id": 1,
      "Inode": "37-128-1",
      "Size": 14,
-     "Name": ""
+     "Name": "",
+     "Resident": true
     },
     {
      "Type": "$EA_INFORMATION",
@@ -151,7 +161,8 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
      "Id": 3,
      "Inode": "37-208-3",
      "Size": 8,
-     "Name": ""
+     "Name": "",
+     "Resident": true
     },
     {
      "Type": "$EA",
@@ -159,13 +170,15 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
      "Id": 4,
      "Inode": "37-224-4",
      "Size": 92,
-     "Name": ""
+     "Name": "",
+     "Resident": true
     }
    ],
    "Hardlinks": [
     "another_file.txt"
    ],
-   "Device": "\\\\.\\C:"
+   "Device": "\\\\.\\C:",
+   "OSPath": "\\\\.\\C:\\another_file.txt"
   },
   "EA": {
    "Name": "THIRD",
@@ -179,7 +192,8 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
    "Id": 4,
    "Inode": "37-224-4",
    "Size": 92,
-   "Name": ""
+   "Name": "",
+   "Resident": true
   },
   "_Source": "Windows.NTFS.ExtendedAttributes"
  }
@@ -220,7 +234,8 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
      "Id": 0,
      "Inode": "49-16-0",
      "Size": 72,
-     "Name": ""
+     "Name": "",
+     "Resident": true
     },
     {
      "Type": "$FILE_NAME",
@@ -228,7 +243,8 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
      "Id": 2,
      "Inode": "49-48-2",
      "Size": 96,
-     "Name": ""
+     "Name": "",
+     "Resident": true
     },
     {
      "Type": "$DATA",
@@ -236,7 +252,8 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
      "Id": 1,
      "Inode": "49-128-1",
      "Size": 12,
-     "Name": ""
+     "Name": "",
+     "Resident": true
     },
     {
      "Type": "$EA_INFORMATION",
@@ -244,7 +261,8 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
      "Id": 3,
      "Inode": "49-208-3",
      "Size": 8,
-     "Name": ""
+     "Name": "",
+     "Resident": true
     },
     {
      "Type": "$EA",
@@ -252,13 +270,15 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
      "Id": 4,
      "Inode": "49-224-4",
      "Size": 10268,
-     "Name": ""
+     "Name": "",
+     "Resident": false
     }
    ],
    "Hardlinks": [
     "just_a_file.txt"
    ],
-   "Device": "\\\\.\\C:"
+   "Device": "\\\\.\\C:",
+   "OSPath": "\\\\.\\C:\\just_a_file.txt"
   },
   "EA": {
    "Name": "NOTHINGTOSEEHERE",
@@ -272,7 +292,8 @@ LET _ <= remap(config=format(format=RemappingTemplate, args=[ srcDir+'/artifacts
    "Id": 4,
    "Inode": "49-224-4",
    "Size": 10268,
-   "Name": ""
+   "Name": "",
+   "Resident": false
   },
   "_Source": "Windows.NTFS.ExtendedAttributes"
  }

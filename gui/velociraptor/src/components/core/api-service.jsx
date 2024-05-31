@@ -53,8 +53,24 @@ function retryDelay(retryNumber = 0) {
 }
 
 function isRetryableError(error) {
-  return error.code !== 'ECONNABORTED' && (!error.response || (
-      error.response.status >= 500 && error.response.status <= 599));
+    if (error.code === 'ECONNABORTED') {
+        return false;
+    }
+
+    if (!error.response) {
+        return true;
+    }
+
+    // This represents a real server error no need to retry it.
+    if (error.response.data && error.response.data.code) {
+        return false;
+    }
+
+    if (error.response.status >= 500 && error.response.status <= 599) {
+        return true;
+    }
+
+    return false;
 }
 
 function isNetworkError(error) {
@@ -82,6 +98,7 @@ function isNetworkOrIdempotentRequestError(error) {
 function simpleNetworkErrorCheck(error) {
   if ((error && error.message) === 'Network Error') {
     return true;
+
   } else {
       return isNetworkOrIdempotentRequestError(error);
   }
@@ -115,7 +132,8 @@ const handle_error = err=>{
     if (err.response && err.response.status === 401) {
         const redirectTemplate = window.globals.AuthRedirectTemplate || "";
         if (redirectTemplate !== "") {
-            const instantiatedTemplate = redirectTemplate.replaceAll('%LOCATION%', encodeURIComponent(window.location.href));
+            const instantiatedTemplate = redirectTemplate.replaceAll(
+                '%LOCATION%', encodeURIComponent(window.location.href));
             window.location.assign(instantiatedTemplate);
             return {data: {}, cancel: false};
         }
@@ -176,7 +194,7 @@ const get_blob = function(url, params, cancel_token) {
             var reader = new FileReader();
 
             reader.onloadend = function() {
-                resolve(reader.result);
+                resolve({data: reader.result, blob: blob});
             };
 
             reader.readAsArrayBuffer(blob.data);
@@ -184,11 +202,18 @@ const get_blob = function(url, params, cancel_token) {
 
         return arrayPromise;
     }).catch(err=>{
-        let data = err.response && err.response.data;
-        if(data) {
-            data.text().then((message)=>_.each(hooks, h=>h("Error: " + message)));
-        }
-        return "";
+        return {
+            error: err,
+            // If callers want to actually report the error they need
+            // to call this.
+            report_error: ()=>{
+                let data = err.response && err.response.data;
+                if(data) {
+                    data.text().then((message)=>_.each(
+                        hooks, h=>h("Error: " + message)));
+                }
+            }
+        };
     });
 };
 
@@ -242,7 +267,14 @@ const href = function(url, params, options) {
     options = options || {};
     Object.assign(options, {indices: false});
 
-    return base_path + url + "?" + qs.stringify(params, options);
+    // If the URL already contains a query string, we need to append
+    // to it with &
+    let joiner = "?";
+    if (url.match(/[&]/)) {
+        joiner = "&";
+    }
+
+    return base_path + url + joiner + qs.stringify(params, options);
 };
 
 const delete_req = function(url, params, cancel_token) {
@@ -272,7 +304,6 @@ const src_of = function (url) {
     }
     return window.base_path + url;
 };
-
 
 const error = function(msg) {
     _.each(hooks, h=>h(msg));

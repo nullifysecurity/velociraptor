@@ -16,6 +16,21 @@ SELECT *, basename(path=file_store(path=vfs_path)) FROM uploads(client_id='C.4f5
   "file_size": 1319,
   "uploaded_size": 1319,
   "client_path": "C:\\1.zip",
+  "Upload": {
+   "Path": "C:\\1.zip",
+   "Size": 1319,
+   "StoredSize": 1319,
+   "Components": [
+    "clients",
+    "C.4f5e52adf0a337a9",
+    "collections",
+    "F.BN2HJCPOF5U7U",
+    "uploads",
+    "auto",
+    "C:",
+    "1.zip"
+   ]
+  },
   "basename(path=file_store(path=vfs_path))": "1.zip"
  },
  {
@@ -23,9 +38,13 @@ SELECT *, basename(path=file_store(path=vfs_path)) FROM uploads(client_id='C.4f5
   "started": "2019-11-08 07:30:59.920512962 +0000 UTC",
   "vfs_path": "fs:/clients/C.4f5e52adf0a337a9/collections/F.BN2HJCPOF5U7U/uploads/file/C:/old_style.zip",
   "expected_size": 1319,
+  "Upload": {
+   "Path": "/clients/C.4f5e52adf0a337a9/collections/F.BN2HJCPOF5U7U/uploads/file/C:/old_style.zip",
+   "Size": 0
+  },
   "basename(path=file_store(path=vfs_path))": "old_style.zip"
  }
-]SELECT collect_client( client_id='C.11a3013ccaXXXXX', artifacts='Windows.KapeFiles.Targets', env=dict(Device ='C:', VSSAnalysis='Y', KapeTriage='Y')).request AS Flow FROM scope()[
+]SELECT collect_client( client_id='C.11a3013ccaXXXXX', artifacts='Windows.KapeFiles.Targets', env=dict(Device ='C:', VSSAnalysisAge=2, KapeTriage='Y')).request AS Flow FROM scope()[
  {
   "Flow": {
    "creator": "VelociraptorServer",
@@ -47,8 +66,8 @@ SELECT *, basename(path=file_store(path=vfs_path)) FROM uploads(client_id='C.4f5
         "comment": ""
        },
        {
-        "key": "VSSAnalysis",
-        "value": "Y",
+        "key": "VSSAnalysisAge",
+        "value": "2",
         "comment": ""
        },
        {
@@ -57,7 +76,10 @@ SELECT *, basename(path=file_store(path=vfs_path)) FROM uploads(client_id='C.4f5
         "comment": ""
        }
       ]
-     }
+     },
+     "max_batch_wait": 0,
+     "max_batch_rows": 0,
+     "max_batch_rows_buffer": 0
     }
    ],
    "cpu_limit": 0,
@@ -73,7 +95,7 @@ SELECT *, basename(path=file_store(path=vfs_path)) FROM uploads(client_id='C.4f5
    "ops_per_second": 0
   }
  }
-]SELECT collect_client( client_id='C.11a3013ccaXXXXX', artifacts='Windows.KapeFiles.Targets', spec=dict(`Windows.KapeFiles.Targets`=dict( Device ='C:', VSSAnalysis='Y', KapeTriage='Y'))).request AS Flow FROM scope()[
+]SELECT collect_client( client_id='C.11a3013ccaXXXXX', artifacts='Windows.KapeFiles.Targets', spec=dict(`Windows.KapeFiles.Targets`=dict( Device ='C:', VSSAnalysisAge=2, KapeTriage='Y'))).request AS Flow FROM scope()[
  {
   "Flow": {
    "creator": "VelociraptorServer",
@@ -95,8 +117,8 @@ SELECT *, basename(path=file_store(path=vfs_path)) FROM uploads(client_id='C.4f5
         "comment": ""
        },
        {
-        "key": "VSSAnalysis",
-        "value": "Y",
+        "key": "VSSAnalysisAge",
+        "value": "2",
         "comment": ""
        },
        {
@@ -105,7 +127,10 @@ SELECT *, basename(path=file_store(path=vfs_path)) FROM uploads(client_id='C.4f5
         "comment": ""
        }
       ]
-     }
+     },
+     "max_batch_wait": 0,
+     "max_batch_rows": 0,
+     "max_batch_rows_buffer": 0
     }
    ],
    "cpu_limit": 0,
@@ -126,24 +151,21 @@ SELECT *, basename(path=file_store(path=vfs_path)) FROM uploads(client_id='C.4f5
   "name": "Generic.Collectors.File"
  },
  {
-  "name": "Windows.Collectors.VSS"
- },
- {
   "name": "Windows.KapeFiles.Targets"
  }
 ]SELECT name FROM artifact_definitions() WHERE name =~ 'Windows.KapeFiles.Targets'[
  {
   "name": "Windows.KapeFiles.Targets"
  }
-]SELECT FullPath FROM glob( globs="/clients/C.4f5e52adf0a337a9/collections/F.BN2HJCPOF5U7U/uploads/**", accessor="fs")[
+]SELECT OSPath FROM glob( globs="/clients/C.4f5e52adf0a337a9/collections/F.BN2HJCPOF5U7U/uploads/**", accessor="fs")[
  {
-  "FullPath": "fs:/clients/C.4f5e52adf0a337a9/collections/F.BN2HJCPOF5U7U/uploads/file"
+  "OSPath": "fs:/clients/C.4f5e52adf0a337a9/collections/F.BN2HJCPOF5U7U/uploads/file"
  },
  {
-  "FullPath": "fs:/clients/C.4f5e52adf0a337a9/collections/F.BN2HJCPOF5U7U/uploads/file/C:"
+  "OSPath": "fs:/clients/C.4f5e52adf0a337a9/collections/F.BN2HJCPOF5U7U/uploads/file/C:"
  },
  {
-  "FullPath": "fs:/clients/C.4f5e52adf0a337a9/collections/F.BN2HJCPOF5U7U/uploads/file/C:/1.zip"
+  "OSPath": "fs:/clients/C.4f5e52adf0a337a9/collections/F.BN2HJCPOF5U7U/uploads/file/C:/1.zip"
  }
 ]SELECT artifact_set(definition=_value).name FROM items(item={ SELECT * FROM artifact_definitions(names="Generic.Client.Info") WHERE name =~ "Generic.Client.Info" })[
  {
@@ -156,5 +178,19 @@ SELECT *, basename(path=file_store(path=vfs_path)) FROM uploads(client_id='C.4f5
 ]SELECT artifact_set(definition=patch( item=_value, merge=dict(name="Custom.Generic.Client.Info"))).name FROM items(item={ SELECT * FROM artifact_definitions(names="Generic.Client.Info") WHERE name =~ "Generic.Client.Info" })[
  {
   "artifact_set(definition=patch(item=_value, merge=dict(name=\"Custom.Generic.Client.Info\"))).name": "Custom.Generic.Client.Info"
+ }
+]SELECT artifact_set_metadata(name="Custom.Generic.Client.Info", hidden=TRUE) FROM scope()[
+ {
+  "artifact_set_metadata(name=\"Custom.Generic.Client.Info\", hidden=TRUE)": {
+   "hidden": true
+  }
+ }
+]SELECT name, metadata FROM artifact_definitions(names="Custom.Generic.Client.Info")[
+ {
+  "name": "Custom.Generic.Client.Info",
+  "metadata": {
+   "hidden": true,
+   "basic": false
+  }
  }
 ]

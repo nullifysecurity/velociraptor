@@ -25,6 +25,9 @@ type ResultSetWriter interface {
 	// only useful for some implementations of result set writers.
 	SetStartRow(start_row int64)
 
+	// Result sets may be updated in place.
+	Update(index uint64, row *ordereddict.Dict) error
+
 	Write(row *ordereddict.Dict)
 	Flush()
 	Close()
@@ -49,7 +52,10 @@ type ResultSetReader interface {
 	// to parse the data from storage.
 	JSON(ctx context.Context) (<-chan []byte, error)
 	Close()
+
 	TotalRows() int64
+	MTime() time.Time
+	Stacker() api.FSPathSpec
 }
 
 type TimedResultSetReader interface {

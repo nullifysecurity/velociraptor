@@ -6,6 +6,8 @@ import (
 	"sync"
 
 	"github.com/Velocidex/json"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 type RawMessage = json.RawMessage
@@ -85,7 +87,10 @@ func MarshalIndentWithOptions(v interface{}, opts *json.EncOpts) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	return buf.Bytes(), nil
+
+	// Need to make a copy because the real buffer will be reused in
+	// the pool.
+	return CopySlice(buf.Bytes()), nil
 }
 
 func MarshalJsonl(v interface{}) ([]byte, error) {
@@ -110,11 +115,22 @@ func MarshalJsonl(v interface{}) ([]byte, error) {
 		out.Write(serialized)
 		out.Write([]byte{'\n'})
 	}
-	// Need to make a copy because the real buffer will be reused in the pool.
+
+	// Need to make a copy because the real buffer will be reused in
+	// the pool.
 	return CopySlice(out.Bytes()), nil
 }
 
 func Unmarshal(b []byte, v interface{}) error {
+
+	self, ok := v.(proto.Message)
+	if ok {
+		options := &protojson.UnmarshalOptions{
+			DiscardUnknown: true,
+		}
+		return options.Unmarshal(b, self)
+	}
+
 	return json.Unmarshal(b, v)
 }
 

@@ -423,6 +423,8 @@ func (self StarlarkCompileFunction) Call(ctx context.Context,
 	scope vfilter.Scope,
 	args *ordereddict.Dict) vfilter.Any {
 
+	defer vql_subsystem.RegisterMonitor("starl", args)()
+
 	arg := StarlarkCompileArgs{}
 	err := arg_parser.ExtractArgsWithContext(ctx, scope, args, &arg)
 	if err != nil {
@@ -541,6 +543,7 @@ func init() {
 	resolve.AllowRecursion = true
 	resolve.AllowLambda = true
 	resolve.AllowNestedDef = true
+	resolve.AllowGlobalReassign = true
 	vql_subsystem.RegisterFunction(&StarlarkCompileFunction{})
 	vql_subsystem.RegisterProtocol(&StarlModuleAssociative{})
 }

@@ -22,9 +22,11 @@ import (
 	chroma_html "github.com/alecthomas/chroma/formatters/html"
 	"github.com/microcosm-cc/bluemonday"
 	blackfriday "github.com/russross/blackfriday/v2"
+	"www.velocidex.com/golang/velociraptor/actions"
 	actions_proto "www.velocidex.com/golang/velociraptor/actions/proto"
 	artifacts_proto "www.velocidex.com/golang/velociraptor/artifacts/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
+	"www.velocidex.com/golang/velociraptor/constants"
 	"www.velocidex.com/golang/velociraptor/file_store"
 	"www.velocidex.com/golang/velociraptor/json"
 	"www.velocidex.com/golang/velociraptor/paths"
@@ -55,7 +57,7 @@ type GuiTemplateEngine struct {
 	*BaseTemplateEngine
 	tmpl         *template.Template
 	ctx          context.Context
-	log_writer   *notebooCellLogger
+	log_writer   *notebookCellLogger
 	path_manager *paths.NotebookCellPathManager
 	Data         map[string]*actions_proto.VQLResponse
 	Progress     utils.ProgressReporter
@@ -91,7 +93,7 @@ func parseOptions(values []interface{}) (*ordereddict.Dict, []interface{}) {
 // When rendering a table the user can introduce options into the
 // scope.
 func (self *GuiTemplateEngine) getTableOptions() (*ordereddict.Dict, error) {
-	column_types, pres := self.Scope.Resolve("ColumnTypes")
+	column_types, pres := self.Scope.Resolve(constants.COLUMN_TYPES)
 	if !pres {
 		return nil, errors.New("Not found")
 	}
@@ -213,7 +215,7 @@ func (self *GuiTemplateEngine) Table(values ...interface{}) interface{} {
 		for _, item := range t {
 			options := item.Params()
 			options.Set("TableOptions", table_options)
-			options.Set("Version", time.Now().Unix())
+			options.Set("Version", utils.GetTime().Now().Unix())
 
 			result += fmt.Sprintf(
 				`<div class="panel"><grr-csv-viewer base-url="'v1/GetTable'" `+
@@ -278,7 +280,7 @@ func (self *GuiTemplateEngine) genericChart(
 		for _, item := range t {
 			params := item.Params()
 			params.MergeFrom(options)
-			params.Set("Version", time.Now().Unix())
+			params.Set("Version", utils.GetTime().Now().Unix())
 
 			result += fmt.Sprintf(
 				`<div class="panel"><%s base-url="'v1/GetTable'" `+
@@ -546,6 +548,7 @@ func (self *GuiTemplateEngine) MoreMessages() bool {
 func (self *GuiTemplateEngine) Close() {
 	if self.log_writer != nil {
 		self.log_writer.Flush()
+		self.log_writer.Close()
 	}
 	self.BaseTemplateEngine.Close()
 }
@@ -586,8 +589,8 @@ func NewGuiTemplateEngine(
 	*GuiTemplateEngine, error) {
 
 	uploader := &NotebookUploader{
-		config_obj:  config_obj,
-		PathManager: notebook_cell_path_manager,
+		config_obj:                 config_obj,
+		notebook_cell_path_manager: notebook_cell_path_manager,
 	}
 
 	base_engine, err := newBaseTemplateEngine(
@@ -598,7 +601,7 @@ func NewGuiTemplateEngine(
 	}
 
 	// Write logs to this result set.
-	log_writer, err := newNotebookCellLogger(
+	log_writer, err := newNotebookCellLogger(ctx,
 		config_obj, notebook_cell_path_manager.Logs())
 	if err != nil {
 		return nil, err
@@ -645,6 +648,7 @@ func NewBlueMondayPolicy() *bluemonday.Policy {
 	p.AllowAttrs("value", "params").OnElements("bar-chart")
 	p.AllowAttrs("value", "params").OnElements("scatter-chart")
 	p.AllowAttrs("value", "params").OnElements("time-chart")
+	p.AllowAttrs("value").OnElements("velo-value")
 
 	//p.AllowNoAttrs().OnElements("accordion")
 	p.AllowAttrs("params").OnElements("notebook-bar-chart")
@@ -652,7 +656,7 @@ func NewBlueMondayPolicy() *bluemonday.Policy {
 	p.AllowAttrs("params").OnElements("notebook-scatter-chart")
 	p.AllowAttrs("params").OnElements("notebook-time-chart")
 	p.AllowAttrs("name", "params").OnElements("grr-timeline")
-	p.AllowAttrs("name").OnElements("grr-tool-viewer")
+	p.AllowAttrs("name", "version").OnElements("grr-tool-viewer")
 
 	// Required for syntax highlighting.
 	p.AllowAttrs("class").OnElements("span")
@@ -665,6 +669,10 @@ func NewBlueMondayPolicy() *bluemonday.Policy {
 
 func (self *GuiTemplateEngine) RunQuery(vql *vfilter.VQL,
 	result []*paths.NotebookCellQuery) ([]*paths.NotebookCellQuery, error) {
+	query_log := actions.QueryLog.AddQuery(
+		vfilter.FormatToString(self.Scope, vql))
+	defer query_log.Close()
+
 	if result == nil {
 		result = []*paths.NotebookCellQuery{}
 	}
@@ -730,8 +738,10 @@ func (self *GuiTemplateEngine) RunQuery(vql *vfilter.VQL,
 		// Report progress even if no row is emitted
 		case <-time.After(4 * time.Second):
 			rs_writer.Flush()
-			self.Progress.Report(fmt.Sprintf(
-				"Total Rows %v", row_idx))
+			if self.Progress != nil {
+				self.Progress.Report(fmt.Sprintf(
+					"Total Rows %v", row_idx))
+			}
 			next_progress = time.Now().Add(4 * time.Second)
 
 		}

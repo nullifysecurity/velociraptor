@@ -1,19 +1,19 @@
 /*
-   Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+Velociraptor - Dig Deeper
+Copyright (C) 2019-2024 Rapid7 Inc.
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published
-   by the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package logging
 
@@ -91,10 +91,17 @@ func InitLogging(config_obj *config_proto.Config) error {
 		contexts: make(map[*string]*LogContext),
 	}
 
-	for _, component := range []*string{
+	components := []*string{
 		&GenericComponent, &FrontendComponent, &ClientComponent,
-		&GUIComponent, &ToolComponent, &APICmponent, &Audit} {
+		&GUIComponent, &ToolComponent, &APICmponent, &Audit}
 
+	// User asked for all components to go in the same log.
+	if config_obj.Logging != nil &&
+		!config_obj.Logging.SeparateLogsPerComponent {
+		components = []*string{&GenericComponent}
+	}
+
+	for _, component := range components {
 		logger, err := Manager.makeNewComponent(config_obj, component)
 		if err != nil {
 			mu.Unlock()
@@ -162,30 +169,72 @@ type LogContext struct {
 
 	mu      sync.Mutex
 	enabled map[string]bool
+
+	listeners map[uint64]chan string
+	component string
+}
+
+func (self *LogContext) AddListener(c chan string) func() {
+	self.mu.Lock()
+	defer self.mu.Unlock()
+
+	if self.listeners == nil {
+		self.listeners = make(map[uint64]chan string)
+	}
+
+	id := utils.GetId()
+	self.listeners[id] = c
+
+	return func() {
+		self.mu.Lock()
+		defer self.mu.Unlock()
+
+		delete(self.listeners, id)
+	}
+}
+
+func (self *LogContext) forwardMessage(msg string) {
+	self.mu.Lock()
+	defer self.mu.Unlock()
+
+	for _, c := range self.listeners {
+		select {
+		case c <- msg:
+		default:
+		}
+	}
 }
 
 func (self *LogContext) Debug(format string, v ...interface{}) {
+	msg := fmt.Sprintf(format, v...)
 	if self.Logger != nil {
-		self.Logger.Debug(fmt.Sprintf(format, v...))
+		self.Logger.Debug(msg)
 	}
+	self.forwardMessage(msg)
 }
 
 func (self *LogContext) Info(format string, v ...interface{}) {
+	msg := fmt.Sprintf(format, v...)
 	if self.Logger != nil {
-		self.Logger.Info(fmt.Sprintf(format, v...))
+		self.Logger.Info(msg)
 	}
+	self.forwardMessage(msg)
 }
 
 func (self *LogContext) Warn(format string, v ...interface{}) {
+	msg := fmt.Sprintf(format, v...)
 	if self.Logger != nil {
-		self.Logger.Warn(fmt.Sprintf(format, v...))
+		self.Logger.Warn(msg)
 	}
+	self.forwardMessage(msg)
 }
 
 func (self *LogContext) Error(format string, v ...interface{}) {
+	msg := fmt.Sprintf(format, v...)
 	if self.Logger != nil {
-		self.Logger.Error(fmt.Sprintf(format, v...))
+		self.Logger.Error(msg)
 	}
+	self.forwardMessage(msg)
 }
 
 func (self *LogContext) IsEnabled(level string) bool {
@@ -240,7 +289,8 @@ func (self *LogManager) GetLogger(
 				Hooks:     make(logrus.LevelHooks),
 				Level:     logrus.DebugLevel,
 			},
-			enabled: make(map[string]bool),
+			component: *component,
+			enabled:   make(map[string]bool),
 		}
 	}
 	return ctx
@@ -312,7 +362,7 @@ func (self *LogManager) makeNewComponent(
 	enabled := make(map[string]bool)
 
 	Log := logrus.New()
-	Log.Out = inMemoryLogWriter{}
+	Log.Out = newInMemoryLogWriter()
 	Log.Level = logrus.DebugLevel
 
 	if !disable_log_to_files &&
@@ -320,8 +370,8 @@ func (self *LogManager) makeNewComponent(
 		config_obj.Logging != nil &&
 		config_obj.Logging.OutputDirectory != "" {
 
-		base_directory := filepath.Join(
-			config_obj.Logging.OutputDirectory, node_name)
+		output_directory := utils.ExpandEnv(config_obj.Logging.OutputDirectory)
+		base_directory := filepath.Join(output_directory, node_name)
 		err := os.MkdirAll(base_directory, 0700)
 		if err != nil {
 			return nil, errors.New("Unable to create logging directory.")
@@ -386,8 +436,9 @@ func (self *LogManager) makeNewComponent(
 	}
 
 	return &LogContext{
-		Logger:  Log,
-		enabled: enabled,
+		Logger:    Log,
+		enabled:   enabled,
+		component: *component,
 	}, nil
 }
 
@@ -495,4 +546,8 @@ func (self inMemoryLogWriter) Write(p []byte) (n int, err error) {
 	memory_logs = append(memory_logs, string(p))
 
 	return len(p), nil
+}
+
+func newInMemoryLogWriter() *inMemoryLogWriter {
+	return &inMemoryLogWriter{}
 }

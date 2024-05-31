@@ -1,15 +1,17 @@
-package collector
+package collector_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Velocidex/ordereddict"
-	"github.com/alecthomas/assert"
 	"github.com/sebdah/goldie"
 	"github.com/stretchr/testify/suite"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
@@ -25,21 +27,25 @@ import (
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/third_party/zip"
 	"www.velocidex.com/golang/velociraptor/utils"
+	"www.velocidex.com/golang/velociraptor/vql/filesystem"
+	"www.velocidex.com/golang/velociraptor/vtesting/assert"
 	"www.velocidex.com/golang/vfilter"
 
 	// Load all needed plugins
 	_ "www.velocidex.com/golang/velociraptor/accessors/data"
 	_ "www.velocidex.com/golang/velociraptor/accessors/sparse"
+	_ "www.velocidex.com/golang/velociraptor/accessors/zip"
 	"www.velocidex.com/golang/velociraptor/vql/acl_managers"
 	_ "www.velocidex.com/golang/velociraptor/vql/filesystem"
 	_ "www.velocidex.com/golang/velociraptor/vql/functions"
 	_ "www.velocidex.com/golang/velociraptor/vql/networking"
 	_ "www.velocidex.com/golang/velociraptor/vql/parsers"
 	_ "www.velocidex.com/golang/velociraptor/vql/parsers/csv"
+	"www.velocidex.com/golang/velociraptor/vql/tools/collector"
 )
 
 var (
-	simpleCollectorArgs = &CollectPluginArgs{
+	simpleCollectorArgs = &collector.CollectPluginArgs{
 		Artifacts: []string{"CollectionWithTypes"},
 		Args: ordereddict.NewDict().
 			Set("CollectionWithTypes", ordereddict.NewDict().
@@ -95,6 +101,16 @@ var (
 				// This will be injected into the output zip by the below artifact.
 				Set("FooVar", "HelloFooVar"))).
 		Set("artifact_definitions", CustomTestArtifactDependent)
+
+	simpleGlobUploader = `
+name: Custom.Uploader
+parameters:
+- name: Root
+sources:
+- query: |
+     SELECT upload(file=OSPath) AS Upload
+     FROM glob(globs='**', root=Root)
+`
 
 	CustomTestArtifactDependent = `
 name: Custom.TestArtifactDependent
@@ -178,21 +194,125 @@ type TestSuite struct {
 
 func (self *TestSuite) SetupTest() {
 	self.ConfigObj = self.LoadConfig()
+	self.ConfigObj.Services.HuntDispatcher = true
+	self.ConfigObj.Services.HuntManager = true
+	self.ConfigObj.Services.ServerArtifacts = true
 	self.LoadArtifactsIntoConfig([]string{customCollectionWithTypes})
+	self.LoadArtifactsIntoConfig(importHuntArtifacts)
 
 	self.TestSuite.SetupTest()
 
-	self.LoadArtifactFiles(
-		"../../../artifacts/definitions/Demo/Plugins/GUI.yaml",
-		"../../../artifacts/definitions/Reporting/Default.yaml",
-	)
-
-	Clock = &utils.MockClock{MockNow: time.Unix(1602103388, 0)}
-	reporting.Clock = Clock
+	collector.Clock = utils.NewMockClock(time.Unix(1602103388, 0))
+	reporting.Clock = collector.Clock
 	launcher, err := services.GetLauncher(self.ConfigObj)
 	assert.NoError(self.T(), err)
 	launcher.SetFlowIdForTests("F.1234")
 
+}
+
+func (self *TestSuite) TestCollectionWithDirectories() {
+	// Create a directory structure with files and directories.
+	dir, err := ioutil.TempDir("", "zip")
+	assert.NoError(self.T(), err)
+
+	defer os.RemoveAll(dir)
+
+	subdir_top := filepath.Join(dir, "Subdir")
+	subdir := filepath.Join(subdir_top, "data")
+	err = os.MkdirAll(subdir, 0700)
+	assert.NoError(self.T(), err)
+
+	filename := filepath.Join(subdir, "hello.txt")
+	fd, err := os.OpenFile(filename,
+		os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0660)
+	assert.NoError(self.T(), err)
+	fd.Write([]byte("Hello World"))
+	fd.Close()
+
+	output := filepath.Join(dir, "output.zip")
+	builder := services.ScopeBuilder{
+		Config:     self.ConfigObj,
+		ACLManager: acl_managers.NullACLManager{},
+		Logger: logging.NewPlainLogger(
+			self.ConfigObj, &logging.FrontendComponent),
+		Env: ordereddict.NewDict(),
+	}
+
+	manager, err := services.GetRepositoryManager(self.ConfigObj)
+	assert.NoError(self.T(), err)
+
+	scope := manager.BuildScope(builder)
+	defer scope.Close()
+
+	for _ = range (collector.CollectPlugin{}).Call(self.Ctx,
+		scope, ordereddict.NewDict().
+			Set("artifacts", []string{"Custom.Uploader"}).
+			Set("args", ordereddict.NewDict().
+				Set("Custom.Uploader", ordereddict.NewDict().
+					Set("Root", subdir_top))).
+			Set("output", output).
+			Set("artifact_definitions", simpleGlobUploader)) {
+	}
+
+	zip_contents, err := openZipFile(output)
+	assert.NoError(self.T(), err)
+
+	// The directory must be stored with a trailing /
+	found := false
+	for _, k := range zip_contents.Keys() {
+		if strings.HasSuffix(k, "/Subdir/data/") {
+			found = true
+			break
+		}
+	}
+	assert.True(self.T(), found)
+
+	// The upload result should complain about uploading a directory
+	upload_results_any, _ := zip_contents.Get("results/Custom.Uploader.json")
+	upload_results := upload_results_any.([]*ordereddict.Dict)
+	assert.Regexp(self.T(), "(is a directory|Incorrect function)",
+		fmt.Sprintf("%v", upload_results[0]))
+
+	// Glob the file with the collector accessor
+	root_path_spec := (filesystem.PathSpecFunction{}).Call(self.Ctx, scope,
+		ordereddict.NewDict().Set("DelegatePath", output))
+
+	// Check that we found the hello file.
+	found = false
+	for row := range (filesystem.GlobPlugin{}).Call(self.Ctx,
+		scope, ordereddict.NewDict().
+			Set("globs", "**").
+			Set("accessor", "collector").
+			Set("root", root_path_spec)) {
+		line := json.MustMarshalString(row)
+		if strings.Contains(line, "/Subdir/data/hello.txt\"") {
+			found = true
+		}
+	}
+	assert.True(self.T(), found)
+
+	// Now do this same thing with a corrupted zip - in the past we
+	// would store a directory without a trailing / which confuses the
+	// glob code so it can not recurse into it.
+	test_zip_file_path, err := filepath.Abs("fixtures/invalid_dir.zip")
+	assert.NoError(self.T(), err)
+
+	root_path_spec = (filesystem.PathSpecFunction{}).Call(self.Ctx, scope,
+		ordereddict.NewDict().Set("DelegatePath", test_zip_file_path))
+
+	// Check that we found the hello file.
+	found = false
+	for row := range (filesystem.GlobPlugin{}).Call(self.Ctx,
+		scope, ordereddict.NewDict().
+			Set("globs", "**").
+			Set("accessor", "collector").
+			Set("root", root_path_spec)) {
+		line := json.MustMarshalString(row)
+		if strings.Contains(line, "/Subdir/data/hello.txt\"") {
+			found = true
+		}
+	}
+	assert.True(self.T(), found)
 }
 
 func (self *TestSuite) TestCollectionWithArtifacts() {
@@ -225,7 +345,7 @@ func (self *TestSuite) TestCollectionWithArtifacts() {
 	additionalArtifactCollectorArgs.Set("report", report_file.Name())
 
 	results := []vfilter.Row{}
-	for row := range (CollectPlugin{}).Call(context.Background(),
+	for row := range (collector.CollectPlugin{}).Call(context.Background(),
 		scope, additionalArtifactCollectorArgs) {
 		results = append(results, row)
 	}
@@ -262,7 +382,7 @@ func (self *TestSuite) TestCollectionWithTypes() {
 		Set("output", output_file.Name()).
 		Set("args", simpleCollectorArgs.Args)
 
-	for row := range (CollectPlugin{}).Call(context.Background(),
+	for row := range (collector.CollectPlugin{}).Call(context.Background(),
 		scope, args) {
 		results = append(results, row)
 	}
@@ -298,7 +418,7 @@ func (self *TestSuite) TestCollectionWithUpload() {
 	// Set the output file.
 	uploadArtifactCollectorArgs.Set("output", output_file.Name())
 
-	for row := range (CollectPlugin{}).Call(context.Background(),
+	for row := range (collector.CollectPlugin{}).Call(context.Background(),
 		scope, uploadArtifactCollectorArgs) {
 		results = append(results, row)
 	}
@@ -309,7 +429,7 @@ func (self *TestSuite) TestCollectionWithUpload() {
 	golden := ordereddict.NewDict().
 		Set("zip_contents", zip_contents)
 
-	import_func := ImportCollectionFunction{}
+	import_func := collector.ImportCollectionFunction{}
 	result := import_func.Call(self.Ctx, scope,
 		ordereddict.NewDict().
 			Set("client_id", "C.30b949dd33e1330a").

@@ -1,19 +1,19 @@
 /*
-   Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+Velociraptor - Dig Deeper
+Copyright (C) 2019-2024 Rapid7 Inc.
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published
-   by the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package filesystem
 
@@ -26,13 +26,13 @@ import (
 	"github.com/Velocidex/ordereddict"
 	"github.com/go-errors/errors"
 
-	"github.com/shirou/gopsutil/v3/disk"
 	"www.velocidex.com/golang/velociraptor/accessors"
 	"www.velocidex.com/golang/velociraptor/acls"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/glob"
 	"www.velocidex.com/golang/velociraptor/vql"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
+	"www.velocidex.com/golang/velociraptor/vql/psutils"
 	"www.velocidex.com/golang/vfilter"
 	"www.velocidex.com/golang/vfilter/arg_parser"
 )
@@ -56,6 +56,7 @@ func (self GlobPlugin) Call(
 
 	go func() {
 		defer close(output_chan)
+		defer vql_subsystem.RegisterMonitor("glob", args)()
 
 		config_obj, ok := vql_subsystem.GetServerConfig(scope)
 		if !ok {
@@ -145,18 +146,6 @@ func (self GlobPlugin) Call(
 				item = pathspec.Path
 				pathspec.Path = ""
 				root.SetPathSpec(pathspec)
-
-				// URL based pathspec. TODO: Remove support for this
-				// type of path.
-			} else if strings.Contains(item, "#") {
-
-				pathspec, err := accessors.PathSpecFromString(item)
-				if err == nil {
-					scope.Log("glob: Glob item appears to be a url. This is deprecated, please use the root arg instead.")
-					item = pathspec.Path
-					pathspec.Path = ""
-					root.SetPathSpec(pathspec)
-				}
 			}
 
 			item_path, err := root.Parse(item)
@@ -164,6 +153,7 @@ func (self GlobPlugin) Call(
 				scope.Log("glob: %v", err)
 				return
 			}
+
 			err = globber.Add(item_path)
 			if err != nil {
 				scope.Log("glob: %v", err)
@@ -267,6 +257,8 @@ func (self ReadFilePlugin) Call(
 	args *ordereddict.Dict) <-chan vfilter.Row {
 	output_chan := make(chan vfilter.Row)
 
+	defer vql_subsystem.RegisterMonitor("read_file", args)()
+
 	arg := &ReadFileArgs{}
 	err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
 	if err != nil {
@@ -330,6 +322,9 @@ func (self *ReadFileFunction) Call(ctx context.Context,
 	scope vfilter.Scope,
 	args *ordereddict.Dict) vfilter.Any {
 	arg := &ReadFileFunctionArgs{}
+
+	defer vql_subsystem.RegisterMonitor("read_file", args)()
+
 	err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
 	if err != nil {
 		scope.Log("read_file: %s", err.Error())
@@ -400,6 +395,7 @@ func (self *StatPlugin) Call(
 
 	go func() {
 		defer close(output_chan)
+		defer vql_subsystem.RegisterMonitor("stat", args)()
 
 		arg := &StatArgs{}
 		err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
@@ -448,6 +444,55 @@ func (self StatPlugin) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) *vfi
 	}
 }
 
+type StatFunction struct{}
+
+func (self *StatFunction) Call(
+	ctx context.Context,
+	scope vfilter.Scope,
+	args *ordereddict.Dict) vfilter.Any {
+
+	defer vql_subsystem.RegisterMonitor("stat", args)()
+
+	arg := &StatArgs{}
+	err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
+	if err != nil {
+		scope.Log("stat: %s", err.Error())
+		return vfilter.Null{}
+	}
+
+	err = vql_subsystem.CheckFilesystemAccess(scope, arg.Accessor)
+	if err != nil {
+		scope.Log("stat: %s", err.Error())
+		return vfilter.Null{}
+	}
+
+	accessor, err := accessors.GetAccessor(arg.Accessor, scope)
+	if err != nil {
+		scope.Log("stat: %s", err.Error())
+		return vfilter.Null{}
+	}
+
+	f, err := accessor.LstatWithOSPath(arg.Filename)
+	if err != nil {
+		return vfilter.Null{}
+	}
+
+	return f
+}
+
+func (self StatFunction) Name() string {
+	return "stat"
+}
+
+func (self StatFunction) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) *vfilter.FunctionInfo {
+	return &vfilter.FunctionInfo{
+		Name:     "stat",
+		Doc:      "Get file information. Unlike glob() this does not support wildcards.",
+		ArgType:  type_map.AddType(scope, &StatArgs{}),
+		Metadata: vql.VQLMetadata().Permissions(acls.FILESYSTEM_READ).Build(),
+	}
+}
+
 func init() {
 	vql_subsystem.RegisterPlugin(&GlobPlugin{})
 	vql_subsystem.RegisterPlugin(&ReadFilePlugin{})
@@ -459,7 +504,7 @@ func init() {
 				scope vfilter.Scope,
 				args *ordereddict.Dict) []vfilter.Row {
 				var result []vfilter.Row
-				partitions, err := disk.Partitions(true)
+				partitions, err := psutils.PartitionsWithContext(ctx)
 				if err == nil {
 					for _, item := range partitions {
 						result = append(result, item)
@@ -470,4 +515,5 @@ func init() {
 		})
 	vql_subsystem.RegisterPlugin(&StatPlugin{})
 	vql_subsystem.RegisterFunction(&ReadFileFunction{})
+	vql_subsystem.RegisterFunction(&StatFunction{})
 }

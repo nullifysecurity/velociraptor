@@ -113,6 +113,7 @@ class NewHuntConfigureHunt extends React.Component {
                           <option label="Windows" value="WINDOWS">Windows</option>
                           <option label="Linux" value="LINUX">LINUX</option>
                           <option label="MacOS" value="OSX">OSX</option>
+                          <option label="MacOSArm" value="OSX">OSX Arm</option>
                         </Form.Control>
                       </Col>
                     </Form.Group>
@@ -192,6 +193,7 @@ class NewHuntConfigureHunt extends React.Component {
 
 
 export default class NewHuntWizard extends React.Component {
+    static contextType = UserConfig;
 
     static propTypes = {
         baseHunt: PropTypes.object,
@@ -254,7 +256,12 @@ export default class NewHuntWizard extends React.Component {
     setStateFromBase = (hunt) => {
         let request = hunt && hunt.start_request;
         let expiry = new Date();
-        expiry.setTime(expiry.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+        let hunt_expiry_hours = this.context.traits && this.context.traits.customizations &&
+            this.context.traits.customizations.hunt_expiry_hours;
+        if (!hunt_expiry_hours) {hunt_expiry_hours = 7 * 24;};
+
+        expiry.setTime(expiry.getTime() + hunt_expiry_hours * 60 * 60 * 1000);
 
         if (request) {
             let state = {
@@ -291,6 +298,12 @@ export default class NewHuntWizard extends React.Component {
             state.hunt_parameters.description = hunt.hunt_description;
             state.hunt_parameters.expires = expiry;
             state.hunt_parameters.org_ids = hunt.org_ids || [];
+
+            if (_.isEmpty(request.artifacts)) {
+                this.setState({artifacts:[]});
+                return state;
+            }
+
 
             // Resolve the artifacts from the request into a list of descriptors.
             api.post("v1/GetArtifacts", {

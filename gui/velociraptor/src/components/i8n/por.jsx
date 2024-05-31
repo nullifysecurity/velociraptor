@@ -181,8 +181,8 @@ const Portuguese = {
     "Permanently delete collection": "Excluir coleta permanentemente",
     "ArtifactDeletionDialog": (session_id, artifacts, total_bytes, total_rows)=>
     <>
-      Você está prestes a excluir permanentemente a coleta de artefatos
-      <b>{session_id}</b>.
+      Você está prestes a excluir permanentemente a coleta de
+      artefatos <b>{session_id}</b>.
       <br/>
       Esta coleta tinha os artefatos <b className="wrapped-text">
                     {artifacts}
@@ -252,7 +252,7 @@ const Portuguese = {
     "Max Execution Time in Seconds":"Tempo Máx. de Execução em Segundos",
     "Max Idle Time in Seconds":"Tempo Ocioso Máximo em Segundos",
     "If set collection will be terminated after this many seconds with no progress.":"Caso configurado, a coleta terminará após se passar o numero selecionado em segundos sem nenhum progresso.",
-    "Max Mb Uploaded":"Máximo de MB carregados",
+    "Max bytes Uploaded":"Máximo de MB carregados",
     "Collection did not upload files":"A coleta não possui arquivos enviados",
 
     "Create Offline collector: Select artifacts to collect":"Criar Coletor Offline: Selecione Artefatos para Coletar",
@@ -383,17 +383,17 @@ const Portuguese = {
         </>,
     "ServedFromURL": (base_path, url)=>
     <>
-      Os clientes obtêm a ferramenta diretamente de
-      <a href={base_path + url}>{url}</a> se
+      Os clientes obtêm a ferramenta diretamente
+      de <a href={base_path + url}>{url}</a> se
       necessário. Observe que, se o hash não corresponder ao
       hash esperado, os clientes rejeitarão o arquivo.
     </>,
     "ServedFromGithub": (github_project, github_asset_regex)=>
     <>
       O URL da ferramenta é atualizado por
-      GitHub como a versão mais recente do projeto
-      <b>{github_project}</b> que se encaixa
-      <b>{github_asset_regex}</b>
+      GitHub como a versão mais recente do
+      projeto <b>{github_project}</b> que se
+      encaixa <b>{github_asset_regex}</b>
     </>,
     "PlaceHolder":
         <>
@@ -502,12 +502,15 @@ const Portuguese = {
     "Theme":"Tópico",
     "Select a theme":"Selecione um tópico",
     "Default Velociraptor":"Velociraptor Padrão",
-    "Velociraptor (light)":"Velociraptor (light)",
-    "Ncurses (light)":"Ncurses (light)",
-    "Velociraptor (dark)":"Velociraptor (dark)",
-    "Github dimmed (dark)":"Github esmaecido (dark)",
-    "Cool Gray (dark)":"Cinza frio (dark)",
-    "Strawberry Milkshake (light)":"Strawberry Milkshake (light)",
+    "Velociraptor Classic (light)": "Velociraptor Clássico (leve)",
+    "Velociraptor (light)":"Velociraptor (leve)",
+    "Ncurses (light)":"Ncurses (leve)",
+    "Ncurses (dark)":"Ncurses (escuro)",
+    "Velociraptor (dark)":"Velociraptor (escuro)",
+    "Github dimmed (dark)":"Github esmaecido (escuro)",
+    "Github (light)":"Github (leve)",
+    "Cool Gray (dark)":"Cinza frio (escuro)",
+    "Strawberry Milkshake (light)":"Strawberry Milkshake (leve)",
     "Downloads Password":"Senha para Downloads",
     "Default password to use for downloads":"Senha padrão para downloads",
 

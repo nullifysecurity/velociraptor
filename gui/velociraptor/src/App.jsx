@@ -1,5 +1,6 @@
 import React, { Component } from 'react';
 import './css/App.css';
+import qs from "qs";
 
 import PropTypes from 'prop-types';
 import VeloNavigator from './components/sidebar/navigator.jsx';
@@ -33,6 +34,7 @@ import { UserSettings } from './components/core/user.jsx';
 import { ContextMenuPopup } from './components/utils/context.jsx';
 import { Switch, Route, withRouter } from "react-router-dom";
 import { Join } from './components/utils/paths.jsx';
+import SecretManager from './components/secrets/secrets.jsx';
 
 import Navbar from 'react-bootstrap/Navbar';
 import Nav from 'react-bootstrap/Nav';
@@ -44,7 +46,8 @@ import './themes/veloci-light.css';
 import './themes/veloci-dark.css';
 import './themes/pink-light.css';
 import './themes/github-dimmed-dark.css';
-import './themes/ncurses.css';
+import './themes/ncurses-light.css';
+import './themes/ncurses-dark.css';
 import './themes/coolgray-dark.css';
 import './themes/midnight.css';
 
@@ -68,6 +71,7 @@ import './themes/midnight.css';
 class App extends Component {
     static propTypes = {
         history: PropTypes.any,
+        location: PropTypes.any,
     }
 
     state = {
@@ -98,8 +102,19 @@ class App extends Component {
         this.setState({current_node: node});
     }
 
+    updateOrgIdFromUrl = ()=>{
+        let search = this.props.location.search.replace('?', '');
+        let params = qs.parse(search);
+        let org_id = params.org_id;
+        if (org_id) {
+            window.globals.OrgId = org_id;
+        }
+    }
+
     // Renders the entire app as normal.
     renderApp() {
+        this.updateOrgIdFromUrl();
+
         // We need to prepare a vfs_path for the navigator to link
         // to. Depending on the current node, we make a link with or
         // without a final "/".
@@ -145,6 +160,9 @@ class App extends Component {
                          query={this.state.query}
                          setClient={this.setClient}
                        />
+                     </Route>
+                     <Route path="/secrets/">
+                       <SecretManager/>
                      </Route>
                      <Route path="/artifacts/:artifact?">
                        <ArtifactInspector client={this.state.client}/>

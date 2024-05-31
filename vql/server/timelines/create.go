@@ -48,7 +48,7 @@ func (self *AddTimelineFunction) Call(ctx context.Context,
 
 	config_obj, ok := vql_subsystem.GetServerConfig(scope)
 	if !ok {
-		scope.Log("Command can only run on the server")
+		scope.Log("timeline_add: Command can only run on the server")
 		return vfilter.Null{}
 	}
 
@@ -99,7 +99,7 @@ func (self *AddTimelineFunction) Call(ctx context.Context,
 		}
 
 		if !utils.IsNil(key) {
-			ts, err := functions.TimeFromAny(scope, key)
+			ts, err := functions.TimeFromAny(ctx, scope, key)
 			if err == nil {
 				writer.Write(ts, vfilter.RowToDict(sub_ctx, subscope, row))
 			}

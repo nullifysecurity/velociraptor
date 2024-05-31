@@ -17,6 +17,10 @@ import OverlayTrigger from 'react-bootstrap/OverlayTrigger';
 import ButtonGroup from 'react-bootstrap/ButtonGroup';
 import Alert from 'react-bootstrap/Alert';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import CSVForm from './csv.jsx';
+import Select from 'react-select';
+import T from '../i8n/i8n.jsx';
+import { JSONparse } from '../utils/json_parse.jsx';
 
 import BootstrapTable from 'react-bootstrap-table-next';
 import cellEditFactory, { Type } from 'react-bootstrap-table2-editor';
@@ -25,6 +29,9 @@ import "./validated.css";
 import "./forms.css";
 
 const numberRegex = RegExp("^[0-9]+$");
+
+// Should match the code in services/launcher/compiler.go
+const boolRegex = RegExp('^(Y|TRUE|YES|OK)$', "i");
 
 // Returns a date object in local timestamp which represents the UTC
 // date. This is needed because the date selector widget expects to
@@ -242,7 +249,7 @@ export default class VeloForm extends React.Component {
     }
 
     render() {
-        let param = this.props.param;
+        let param = this.props.param || {};
         let name = param.friendly_name || param.name;
 
         switch(param.type) {
@@ -250,102 +257,10 @@ export default class VeloForm extends React.Component {
             return <></>;
 
         case "csv": {
-            let data = parseCSV(this.props.value);
-            let columns = [{
-                dataField: "_id",
-                text: "",
-                style: {
-                    width: '8%',
-                },
-                headerFormatter: (column, colIndex) => {
-                    if (colIndex === 0) {
-                        return <ButtonGroup>
-                                 <Button variant="default-outline" size="sm"
-                                    onClick={() => {
-                                        // Add an extra row at the current row index.
-                                        let data = parseCSV(this.props.value);
-                                        data.data.splice(0, 0, {});
-                                        this.props.setValue(
-                                            serializeCSV(data.data,
-                                                         data.columns));
-                                    }}
-                                 >
-                                   <FontAwesomeIcon icon="plus"/>
-                                 </Button>
-                               </ButtonGroup>;
-                    };
-                    return column;
-                },
-                formatter: (id, row) => {
-                    return <ButtonGroup>
-                             <Button variant="default-outline" size="sm"
-                                     onClick={() => {
-                                         // Add an extra row at the current row index.
-                                         let data = parseCSV(this.props.value);
-                                         data.data.splice(id, 0, {});
-                                         this.props.setValue(
-                                             serializeCSV(data.data,
-                                                          data.columns));
-                                     }}
-                             >
-                               <FontAwesomeIcon icon="plus"/>
-                             </Button>
-                             <Button variant="default-outline" size="sm"
-                                     onClick={() => {
-                                         // Drop th current row at the current row index.
-                                         let data = parseCSV(this.props.value);
-                                         data.data.splice(id, 1);
-                                         this.props.setValue(
-                                             serializeCSV(data.data,
-                                                          data.columns));
-                                     }}
-                             >
-                               <FontAwesomeIcon icon="trash"/>
-                             </Button>
-                           </ButtonGroup>;
-                },
-            }];
-            _.each(data.columns, (name) => {
-                columns.push({dataField: name,
-                               editor: {
-                                   type: Type.TEXTAREA
-                               },
-                              text: name});
-            });
-
-            _.map(data.data, (item, idx) => {item["_id"] = idx;});
-
-            return (
-                <Form.Group as={Row}>
-                  <Form.Label column sm="3">
-                    <OverlayTrigger
-                      delay={{show: 250, hide: 400}}
-                      overlay={(props)=>renderToolTip(props, param)}>
-                      <div>
-                        {name}
-                      </div>
-                    </OverlayTrigger>
-                  </Form.Label>
-
-                  <Col sm="8">
-                    <BootstrapTable
-                      hover condensed bootstrap4
-                      data={data.data}
-                      keyField="_id"
-                      columns={columns}
-                      cellEdit={ cellEditFactory({
-                          mode: 'click',
-                          afterSaveCell: (oldValue, newValue, row, column) => {
-                              // Update the CSV value.
-                              let new_data = serializeCSV(data.data, data.columns);
-                              this.props.setValue(new_data);
-                          },
-                          blurToSave: true,
-                      }) }
-                    />
-                  </Col>
-                </Form.Group>
-            );
+            return <CSVForm
+                     param={this.props.param}
+                     value={this.props.value}
+                     setValue={this.props.setValue}/>;
         }
 
         case "regex":
@@ -435,39 +350,48 @@ export default class VeloForm extends React.Component {
                     </OverlayTrigger>
                   </Form.Label>
                   <Col sm="8">
-                    <DateTimePicker
-                      showLeadingZeros={true}
-                      onChange={(value) => {
-                          // Clear the prop value
-                          if (!_.isDate(value)) {
-                              this.props.setValue(undefined);
+                    <ButtonGroup>
+                      <DateTimePicker
+                        className="btn-group"
+                        showLeadingZeros={true}
+                        onChange={(value) => {
+                            // Clear the prop value
+                            if (!_.isDate(value)) {
+                                this.props.setValue(undefined);
 
-                              // If the form is in UTC we take the
-                              // date the form gives us (which is in
-                              // local timezone) and force the same
-                              // date into a serialized ISO in Z time.
-                          } else if(this.state.isUTC) {
-                              let local_time = convertToDate(value);
-                              let utc_time = utcTimeFromLocalTime(local_time);
-                              this.props.setValue(utc_time.toISOString());
+                                // If the form is in UTC we take the
+                                // date the form gives us (which is in
+                                // local timezone) and force the same
+                                // date into a serialized ISO in Z time.
+                            } else if(this.state.isUTC) {
+                                let local_time = convertToDate(value);
+                                let utc_time = utcTimeFromLocalTime(local_time);
+                                this.props.setValue(utc_time.toISOString());
 
-                          } else {
-                              // When in local time we just set the
-                              // time as it is.
-                              let local_time = convertToDate(value);
-                              this.props.setValue(local_time.toISOString());
-                          }
-                      }}
-                      value={date}
-                    />
-                    {this.state.isUTC ?
-                     <Button variant="default-outline"
-                             onClick={() => this.setState({isUTC: false})}
-                             size="sm">UTC</Button>:
-                     <Button variant="default-outline"
-                             onClick={() => this.setState({isUTC: true})}
-                             size="sm">Local</Button>
-                    }
+                            } else {
+                                // When in local time we just set the
+                                // time as it is.
+                                let local_time = convertToDate(value);
+                                this.props.setValue(local_time.toISOString());
+                            }
+                        }}
+                        value={date}
+                      />
+                      {this.state.isUTC ?
+                       <Button variant="default-outline"
+                               onClick={() => this.setState({isUTC: false})}
+                               size="sm">UTC</Button>:
+                       <Button variant="default-outline"
+                               onClick={() => this.setState({isUTC: true})}
+                               size="sm">{T("Local")}</Button>
+                      }
+                      <Button variant="default-outline"
+                              onClick={() => {
+                                  let now = new Date();
+                                  this.props.setValue(now.toISOString());
+                              }}
+                              size="sm">{T("Now")}</Button>
+                    </ButtonGroup>
                   </Col>
                 </Form.Group>
             );
@@ -498,8 +422,48 @@ export default class VeloForm extends React.Component {
                   </Col>
                 </Form.Group>
             );
+
+        case "multichoice":
+            let options = [];
+            _.each(this.props.param.choices, x=>{
+                options.push({value: x, label: x});
+            });
+
+            let defaults = _.map(JSONparse(this.props.value, []),
+                                 x=>{return {value: x, label: x};});
+
+            return (
+                <Form.Group as={Row}>
+                  <Form.Label column sm="3">
+                    <OverlayTrigger
+                      delay={{show: 250, hide: 400}}
+                      overlay={(props)=>renderToolTip(props, param)}>
+                      <div>
+                        {name}
+                      </div>
+                    </OverlayTrigger>
+                  </Form.Label>
+                  <Col sm="8">
+                    <Select
+                      placeholder={T("Choose one or more items")}
+                      className="velo"
+                      classNamePrefix="velo"
+                      closeMenuOnSelect={false}
+                      isMulti
+                      defaultValue={defaults}
+                      onChange={e=>{
+                          let data = _.map(e, x=>x.value);
+                          this.props.setValue(JSON.stringify(data));
+                      }}
+                      options={options}
+                      />
+                  </Col>
+                </Form.Group>
+            );
+
         case "artifactset":
-            // No artifacts means we haven't loaded yet.  If there are truly no artifacts, we've got bigger problems.
+            // No artifacts means we haven't loaded yet.  If there are
+            // truly no artifacts, we've got bigger problems.
             if (this.state.multichoices === undefined ||
                 this.state.artifact_loading) {
               return <></>;
@@ -569,7 +533,7 @@ export default class VeloForm extends React.Component {
                               this.props.setValue("N");
                           }
                       }}
-                      checked={this.props.value === "Y"}
+                      checked={boolRegex.test(this.props.value)}
                       value={this.props.value} />
                   </Col>
                 </Form.Group>

@@ -17,15 +17,11 @@ Queries:
     LIMIT 10
 
   # Check the lnk parser
-  - SELECT * FROM column_filter(query={
-      SELECT * FROM Artifact.Windows.Forensics.Lnk(
-        Glob=srcDir + "/artifacts/testdata/files/1.lnk")
-    }, exclude="FullPath|time|_|SourceModified|SourceCreated")
+  - SELECT ShellLinkHeader,LinkInfo,LinkTarget.LinkTarget,StringData,ExtraData
+    FROM Artifact.Windows.Forensics.Lnk(TargetGlob=srcDir + "/artifacts/testdata/files/1.lnk")
 
-  - SELECT * FROM column_filter(query={
-      SELECT * FROM Artifact.Windows.Forensics.Lnk(
-        Glob=srcDir + "/artifacts/testdata/files/password.txt.lnk")
-    }, exclude="FullPath|time|_|SourceModified|SourceCreated")
+  - SELECT ShellLinkHeader,LinkInfo,LinkTarget.LinkTarget,StringData,ExtraData
+    FROM Artifact.Windows.Forensics.Lnk(TargetGlob=srcDir + "/artifacts/testdata/files/password.txt.lnk")
 
   # Check that binary parser arrays and foreach interact correctly
   # (array implement the iterator protocol properly).
@@ -33,3 +29,10 @@ Queries:
       accessor="data",
       filename=unhex(string=Data),
       profile=Profile, struct="MRU").Items)
+
+  # Check that binary parser and flatten work properly
+  - SELECT * FROM flatten(query={
+      SELECT 1 AS Foo, parse_binary(accessor="data",
+         filename=unhex(string=Data),profile=Profile, struct="MRU").Items AS Items
+      FROM scope()
+    })

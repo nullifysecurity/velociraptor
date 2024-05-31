@@ -59,6 +59,7 @@ func Retry(ctx context.Context,
 			select {
 			case <-ctx.Done():
 				return timeoutError
+
 			case <-time.After(time.Duration(RPC_BACKOFF) * time.Second):
 			}
 
@@ -96,7 +97,12 @@ func (self *RemoteDataStore) _GetSubject(
 		time.Duration(RPC_TIMEOUT)*time.Second)
 	defer cancel()
 
-	conn, closer, err := grpc_client.Factory.GetAPIClient(ctx, config_obj)
+	// Make the call as the superuser
+	conn, closer, err := grpc_client.Factory.GetAPIClient(ctx,
+		grpc_client.SuperUser, config_obj)
+	if err != nil {
+		return err
+	}
 	defer closer()
 
 	result, err := conn.GetSubject(ctx, &api_proto.DataRequest{
@@ -188,7 +194,9 @@ func (self *RemoteDataStore) _SetSubjectWithCompletion(
 		time.Duration(RPC_TIMEOUT)*time.Second)
 	defer cancel()
 
-	conn, closer, err := grpc_client.Factory.GetAPIClient(ctx, config_obj)
+	// Make the call as the superuser
+	conn, closer, err := grpc_client.Factory.GetAPIClient(
+		ctx, grpc_client.SuperUser, config_obj)
 	defer closer()
 
 	_, err = conn.SetSubject(ctx, &api_proto.DataRequest{
@@ -222,7 +230,8 @@ func (self *RemoteDataStore) _DeleteSubjectWithCompletion(
 		time.Duration(RPC_TIMEOUT)*time.Second)
 	defer cancel()
 
-	conn, closer, err := grpc_client.Factory.GetAPIClient(ctx, config_obj)
+	conn, closer, err := grpc_client.Factory.GetAPIClient(
+		ctx, grpc_client.SuperUser, config_obj)
 	defer closer()
 
 	_, err = conn.DeleteSubject(ctx, &api_proto.DataRequest{
@@ -259,7 +268,8 @@ func (self *RemoteDataStore) _DeleteSubject(
 		time.Duration(RPC_TIMEOUT)*time.Second)
 	defer cancel()
 
-	conn, closer, err := grpc_client.Factory.GetAPIClient(ctx, config_obj)
+	conn, closer, err := grpc_client.Factory.GetAPIClient(
+		ctx, grpc_client.SuperUser, config_obj)
 	defer closer()
 
 	_, err = conn.DeleteSubject(ctx, &api_proto.DataRequest{
@@ -299,7 +309,8 @@ func (self *RemoteDataStore) _ListChildren(
 		time.Duration(RPC_TIMEOUT)*time.Second)
 	defer cancel()
 
-	conn, closer, err := grpc_client.Factory.GetAPIClient(ctx, config_obj)
+	conn, closer, err := grpc_client.Factory.GetAPIClient(
+		ctx, grpc_client.SuperUser, config_obj)
 	defer closer()
 
 	result, err := conn.ListChildren(ctx, &api_proto.DataRequest{
@@ -337,7 +348,7 @@ func NewRemoteDataStore(ctx context.Context) *RemoteDataStore {
 	return result
 }
 
-func StartRemoteDatastore(
+func StartDatastore(
 	ctx context.Context, wg *sync.WaitGroup,
 	config_obj *config_proto.Config) error {
 
@@ -356,6 +367,8 @@ func StartRemoteDatastore(
 		remote_datastopre_imp = NewRemoteDataStore(ctx)
 		g_impl = nil
 		remote_mu.Unlock()
+	} else if implementation == "FileBaseDataStore" {
+		return startFullDiskChecker(ctx, wg, config_obj)
 	}
 	return nil
 }

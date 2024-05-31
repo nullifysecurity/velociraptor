@@ -86,8 +86,17 @@ func (self *MemoryReader) Read(buf []byte) (int, error) {
 }
 
 func (self *MemoryReader) Seek(offset int64, whence int) (int64, error) {
-	if whence == 0 {
+	switch whence {
+	case os.SEEK_SET:
 		self.offset = int(offset)
+	case os.SEEK_CUR:
+		offset += int64(self.offset)
+	case os.SEEK_END:
+		buff, ok := self.memory_file_store.Get(self.filename)
+		if !ok {
+			return 0, io.EOF
+		}
+		offset += int64(len(buff))
 	}
 	return offset, nil
 }
@@ -128,18 +137,65 @@ func (self *MemoryWriter) Size() (int64, error) {
 	return int64(len(self.buf)), nil
 }
 
+func (self *MemoryWriter) Update(data []byte, offset int64) error {
+	defer api.InstrumentWithDelay("update", "MemoryWriter", nil)()
+
+	err := self._Flush()
+	if err != nil {
+		return err
+	}
+
+	buff, ok := self.memory_file_store.Get(self.filename)
+	if !ok {
+		return os.ErrNotExist
+	}
+
+	if offset >= int64(len(buff)) {
+		return os.ErrNotExist
+	}
+
+	// Write the bytes into buffer offset
+	for i := 0; i < len(data); i++ {
+		if offset >= int64(len(buff)) {
+			buff = append(buff, data[i])
+		} else {
+			buff[offset] = data[i]
+		}
+		offset++
+	}
+
+	self.memory_file_store.mu.Lock()
+	defer self.memory_file_store.mu.Unlock()
+
+	self.memory_file_store.Data.Set(self.filename, buff)
+	self.buf = buff
+	return nil
+}
+
 func (self *MemoryWriter) Write(data []byte) (int, error) {
-	defer api.InstrumentWithDelay("write", "MemoryReader", nil)()
+	defer api.InstrumentWithDelay("write", "MemoryWriter", nil)()
 
 	self.buf = append(self.buf, data...)
 	return len(data), nil
 }
 
-func (self *MemoryWriter) Flush() error { return nil }
+func (self *MemoryWriter) Flush() error {
+	self.memory_file_store.mu.Lock()
+	defer self.memory_file_store.mu.Unlock()
+
+	return self._Flush()
+}
+
+func (self *MemoryWriter) _Flush() error {
+	self.memory_file_store.Data.Set(self.filename, self.buf)
+	self.buf = nil
+
+	return nil
+}
 
 func (self *MemoryWriter) Close() error {
 	if self.closed {
-		panic("MemoryWriter already closed")
+		// panic("MemoryWriter already closed")
 	}
 	self.closed = true
 
@@ -157,7 +213,7 @@ func (self *MemoryWriter) Close() error {
 }
 
 func (self *MemoryWriter) Truncate() error {
-	defer api.InstrumentWithDelay("truncate", "MemoryReader", nil)()
+	defer api.InstrumentWithDelay("truncate", "MemoryWriter", nil)()
 
 	self.buf = nil
 	return nil
@@ -218,7 +274,7 @@ func (self *MemoryFileStore) ReadFile(path api.FSPathSpec) (api.FileReader, erro
 }
 
 func (self *MemoryFileStore) WriteFile(path api.FSPathSpec) (api.FileWriter, error) {
-	return self.WriteFileWithCompletion(path, nil)
+	return self.WriteFileWithCompletion(path, utils.SyncCompleter)
 }
 
 func (self *MemoryFileStore) WriteFileWithCompletion(
@@ -311,6 +367,7 @@ func (self *MemoryFileStore) ListDirectory(root_path api.FSPathSpec) ([]api.File
 			continue
 		}
 
+		// The next level after root_path
 		name := components[len(root_components)]
 
 		// It is a directory if there are more components so we add a
@@ -325,6 +382,8 @@ func (self *MemoryFileStore) ListDirectory(root_path api.FSPathSpec) ([]api.File
 		// components = ["a", "b"]
 		var new_child api.FileInfo
 		if len(root_components)+1 == len(components) {
+			// Get the original extension so we can determine if it is
+			// a datastore path.
 			base_name := path.Base(filename)
 
 			// This is a datastore path - skip
@@ -332,7 +391,7 @@ func (self *MemoryFileStore) ListDirectory(root_path api.FSPathSpec) ([]api.File
 				continue
 			}
 
-			name_type, name := api.GetFileStorePathTypeFromExtension(base_name)
+			name_type, _ := api.GetFileStorePathTypeFromExtension(base_name)
 			child := root_path.AddUnsafeChild(name).SetType(name_type)
 
 			new_child = &vtesting.MockFileInfo{

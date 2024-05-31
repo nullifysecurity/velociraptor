@@ -1,19 +1,19 @@
 /*
-   Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+Velociraptor - Dig Deeper
+Copyright (C) 2019-2024 Rapid7 Inc.
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published
-   by the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package constants
 
@@ -22,11 +22,9 @@ import (
 	"regexp"
 )
 
-var (
-	VERSION = "0.6.9-rc1"
-)
-
 const (
+	VERSION = "0.72.3"
+
 	ENROLLMENT_WELL_KNOWN_FLOW = "E:Enrol"
 	MONITORING_WELL_KNOWN_FLOW = FLOW_PREFIX + "Monitoring"
 
@@ -49,7 +47,7 @@ const (
 	// Messages to the client which we dont care about their responses.
 	IgnoreResponseState = uint64(101)
 
-	USER_AGENT = "Velociraptor - Dig Deeper!"
+	USER_AGENT = "Velociraptor"
 
 	// Globals set in VQL scopes.
 	SCOPE_CONFIG            = "config"
@@ -61,6 +59,7 @@ const (
 	SCOPE_ROOT              = "$root"
 	SCOPE_STACK             = "$stack"
 	SCOPE_DEVICE_MANAGER    = "$device_manager"
+	SCOPE_REPOSITORY        = "$repository"
 	SCOPE_RESPONDER_CONTEXT = "_Context"
 
 	// Artifact names from packs should start with this
@@ -82,11 +81,24 @@ const (
 	NTFS_MAX_LINKS           = "NTFS_MAX_LINKS"
 	NTFS_INCLUDE_SHORT_NAMES = "NTFS_INCLUDE_SHORT_NAMES"
 
+	// VSS Analysis
+	// Max age of VSS in (int) days we will consider.
+	VSS_MAX_AGE_DAYS = "VSS_MAX_AGE_DAYS"
+
 	RAW_REG_CACHE_SIZE  = "RAW_REG_CACHE_SIZE"
 	BINARY_CACHE_SIZE   = "BINARY_CACHE_SIZE"
 	EVTX_FREQUENCY      = "EVTX_FREQUENCY"
 	USN_FREQUENCY       = "USN_FREQUENCY"
 	ZIP_FILE_CACHE_SIZE = "ZIP_FILE_CACHE_SIZE"
+
+	// Used by the SSH accessor to configure access
+	SSH_CONFIG = "SSH_CONFIG"
+
+	// Used by the SMB accessor to configure credentials.
+	SMB_CREDENTIALS = "SMB_CREDENTIALS"
+
+	// Used by the S3 accessor to configure credentials.
+	S3_CREDENTIALS = "S3_CREDENTIALS"
 
 	// VQL tries to balance memory/cpu tradeoffs and also place limits
 	// on memory use. These parameters control this behavior. You can
@@ -102,10 +114,34 @@ const (
 	// represent failure.
 	VQL_ERROR_REGEX = "(?i)(Error:|Symbol.+?not found|Expecting a path arg type, not)"
 
-	// Set in the scope with one or more passwords
+	// Set in the scope with one or more passwords. Used by the zip
+	// accessor to open password protected zip files.
 	ZIP_PASSWORDS = "ZIP_PASSWORDS"
 
+	// If this is set, the logs will report the decrypted password
+	REPORT_ZIP_PASSWORD = "REPORT_ZIP_PASSWORD"
+
+	// If this is set we always copy SQLite files to a tempfile. Used
+	// by the sqlite() plugin.
+	SQLITE_ALWAYS_MAKE_TEMPFILE = "SQLITE_ALWAYS_MAKE_TEMPFILE"
+
+	// This variable in the scope can set a dict that maps columns to
+	// their types. For example
+	// LET ColumnTypes <= dict(Column1="preview_upload")
+	COLUMN_TYPES = "ColumnTypes"
+
+	// Setting this in the scope causes times to be serialized in the
+	// specified timezone instead of UTC. NOTE: The GUI changes times
+	// to the timezone specified in the user preferences so this may
+	// not be immediately visible in the GUI but will affect the
+	// timezone actually serialized.
+	TZ = "TZ"
+
 	PinnedServerName = "VelociraptorServer"
+
+	// Default gateway identity. This is only used when creating the
+	// gateway certificates.
+	PinnedGwName = "GRPC_GW"
 
 	CLIENT_API_VERSION = uint32(4)
 
@@ -117,6 +153,13 @@ const (
 	CLIENT_API_VERSION_0_6_8 = uint32(4)
 
 	DISABLE_DANGEROUS_API_CALLS = "DISABLE_DANGEROUS_API_CALLS"
+
+	// Fixed secret types - definitions in the sanity service
+	AWS_S3_CREDS    = "AWS S3 Creds"
+	SSH_PRIVATE_KEY = "SSH PrivateKey"
+	HTTP_SECRETS    = "HTTP Secrets"
+	SPLUNK_CREDS    = "Splunk Creds"
+	ELASTIC_CREDS   = "Elastic Creds"
 )
 
 type key int

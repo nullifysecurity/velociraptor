@@ -48,7 +48,7 @@ func (self TimelinePlugin) Call(
 
 		config_obj, ok := vql_subsystem.GetServerConfig(scope)
 		if !ok {
-			scope.Log("Command can only run on the server")
+			scope.Log("timeline: Command can only run on the server")
 			return
 		}
 
@@ -74,7 +74,7 @@ func (self TimelinePlugin) Call(
 		defer reader.Close()
 
 		if !utils.IsNil(arg.StartTime) {
-			start, err := functions.TimeFromAny(scope, arg.StartTime)
+			start, err := functions.TimeFromAny(ctx, scope, arg.StartTime)
 			if err != nil {
 				scope.Log("timeline: %v", err)
 				return

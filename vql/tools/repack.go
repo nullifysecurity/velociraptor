@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io/ioutil"
 	"regexp"
 	"strings"
@@ -41,6 +40,7 @@ import (
 )
 
 var (
+	generic_re      = []byte(`#!/bin/sh`)
 	embedded_re     = regexp.MustCompile(`#{3}<Begin Embedded Config>\r?\n`)
 	embedded_msi_re = regexp.MustCompile(`## Velociraptor client configuration`)
 )
@@ -65,6 +65,8 @@ type RepackFunction struct{}
 func (self RepackFunction) Call(ctx context.Context,
 	scope vfilter.Scope,
 	args *ordereddict.Dict) vfilter.Any {
+
+	defer vql_subsystem.RegisterMonitor("repack", args)()
 
 	arg := &RepackFunctionArgs{}
 	err := vql_subsystem.CheckAccess(scope, acls.COLLECT_SERVER)
@@ -98,6 +100,8 @@ func (self RepackFunction) Call(ctx context.Context,
 		return vfilter.Null{}
 	}
 
+	// If arg.Version is not specified we select the latest version
+	// available.
 	exe_bytes, err := readExeFile(ctx, config_obj, scope,
 		arg.Exe, arg.Accessor, arg.Target, arg.Version)
 	if err != nil {
@@ -124,8 +128,10 @@ func (self RepackFunction) Call(ctx context.Context,
 	}
 	w.Close()
 
-	if b.Len() > len(config.FileConfigDefaultYaml)-40 {
-		return fmt.Errorf("config file is too large to embed.")
+	exe_bytes, err = resizeEmbeddedSize(exe_bytes, b.Len())
+	if err != nil {
+		scope.Log("ERROR:client_repack: %v", err)
+		return vfilter.Null{}
 	}
 
 	compressed_config_data := b.Bytes()
@@ -196,7 +202,9 @@ func readExeFile(
 		return ioutil.ReadAll(fd)
 	}
 
-	// Fetch the tool definition
+	// Fetch the tool definition. NOTE: The definitions are in the
+	// Server.Internal.ToolDependencies artifact and will become
+	// available as soon as that artifact is compiled.
 	inventory, err := services.GetInventory(config_obj)
 	if err != nil {
 		return nil, err
@@ -241,6 +249,31 @@ func readExeFile(
 	return exe_bytes[:n], nil
 }
 
+func resizeEmbeddedSize(
+	exe_bytes []byte, required_size int) ([]byte, error) {
+	if len(exe_bytes) < 100 {
+		return nil, errors.New("Binary is too small to resize")
+	}
+
+	// Are we dealing with the generic collector? It has an unlimited
+	// size so we can just increase it to the required size.
+	if utils.BytesEqual(exe_bytes[:len(generic_re)], generic_re) {
+		resize_bytes := make([]byte, len(exe_bytes)+required_size)
+		for i := 0; i < len(exe_bytes); i++ {
+			resize_bytes[i] = exe_bytes[i]
+		}
+		return resize_bytes, nil
+	}
+
+	// For real binaries we have limited space determined by the
+	// compiled in placeholder.
+	if required_size > len(config.FileConfigDefaultYaml)-40 {
+		return nil, errors.New("config file is too large to embed.")
+	}
+
+	return exe_bytes, nil
+}
+
 func RepackMSI(
 	ctx context.Context,
 	scope vfilter.Scope, upload_name string,
@@ -254,6 +287,10 @@ func RepackMSI(
 	for i := 0; i < 2000-config_data_len; i++ {
 		config_data = append(config_data, '\n')
 	}
+
+	// Ensure the packed config ends with a YAML comment to avoid
+	// confusion with the padding being considered part of the yaml.
+	config_data = append(config_data, []byte("\n\n\n# Padding")...)
 
 	match := embedded_msi_re.FindIndex(data)
 	if match == nil || match[1] < 10 {
@@ -349,7 +386,8 @@ func AppendBinaries(
 			Set("ToolName", tool.Name).
 			Set("Filename", "uploads/"+tool.Filename).
 			Set("ExpectedHash", tool.Hash).
-			Set("Size", n))
+			Set("Size", n).
+			Set("Version", tool.Version))
 	}
 
 	csv_writer.Close()

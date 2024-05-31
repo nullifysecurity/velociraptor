@@ -178,8 +178,8 @@ const Deutsch = {
     "Permanently delete collection": "Sammlung endgültig löschen",
     "ArtifactDeletionDialog": (session_id, artifacts, total_bytes, total_rows)=>
     <>
-      Sie sind im Begriff, die Artefaktsammlung endgültig zu löschen
-      <b>{session_id}</b>.
+      Sie sind im Begriff, die Artefaktsammlung endgültig zu
+      löschen <b>{session_id}</b>.
       <br/>
       Diese Sammlung hatte die Artefakte <b className="wrapped-text">
          {artifacts}
@@ -251,7 +251,7 @@ const Deutsch = {
     "Max Execution Time in Seconds":"Max. Ausführungszeit in Sekunden",
     "Max Idle Time in Seconds":"Maximale Leerlaufzeit in Sekunden",
     "If set collection will be terminated after this many seconds with no progress.":"Wenn die Satzsammlung nach so vielen Sekunden ohne Fortschritt beendet wird.",
-    "Max Mb Uploaded":"Max. MB hochgeladen",
+    "Max bytes Uploaded":"Max. MB hochgeladen",
     "Collection did not upload files":"Sammlung hat keine Dateien hochgeladen",
 
     "Create Offline collector: Select artifacts to collect":"Offline-Collector erstellen: Zu sammelnde Artefakte auswählen",
@@ -382,15 +382,16 @@ const Deutsch = {
     </>,
     "ServedFromURL": (base_path, url)=>
     <>
-    Die Clients rufen das Tool bei Bedarf direkt von
-    <a href={base_path + url}>{url}</a> ab. Wenn der Hashwert nicht mit dem
+    Die Clients rufen das Tool bei Bedarf direkt
+    von <a href={base_path + url}>{url}</a> ab. Wenn der Hashwert nicht mit dem
     erwarteten Hashwert übereinstimmt, weisen die Clients die Datei zurück.
     </>,
     "ServedFromGithub": (github_project, github_asset_regex)=>
     <>
-    Die Tool-URL wird von GitHub als die neueste Version des Projekts
-    <b>{github_project}</b>, die mit <b>{github_asset_regex}</b>
-    übereinstimmt, aktualisiert.
+    Die Tool-URL wird von GitHub als die neueste Version des
+    Projekts <b>{github_project}</b>, die
+    mit <b>{github_asset_regex}</b> übereinstimmt,
+    aktualisiert.
     </>,
     "PlaceHolder":
     <>
@@ -499,9 +500,12 @@ const Deutsch = {
     "Theme":"Theme",
     "Select a theme":"Wählen Sie ein Theme aus",
     "Default Velociraptor":"Standard-Velociraptor",
+    "Velociraptor Classic (light)": "Velociraptor-Klassiker (hell)",
     "Velociraptor (light)":"Velociraptor (hell)",
     "Velociraptor (dark)":"Velociraptor (dunkel)",
     "Github dimmed (dark)":"Github gedimmt (dunkel)",
+    "Github (light)": "Github (hell)",
+    "Ncurses (dark)": "Ncurses (dunkel)",
     "Ncurses (light)":"Ncurses (hell)",
     "Cool Gray (dark)":"Cool Grey (dunkel)",
     "Strawberry Milkshake (light)":"Erdbeer-Milchshake (hell)",

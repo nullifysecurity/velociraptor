@@ -1,21 +1,29 @@
 package config
 
 import (
-	"bytes"
-	"compress/zlib"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"os"
 	"os/user"
+	"path/filepath"
+	"regexp"
 	"runtime"
 
 	"github.com/Velocidex/yaml/v2"
 	"github.com/go-errors/errors"
-	"google.golang.org/protobuf/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/logging"
+	"www.velocidex.com/golang/velociraptor/services/writeback"
 	"www.velocidex.com/golang/velociraptor/utils"
+)
+
+var (
+	noEmbeddedConfig = errors.New(
+		"No embedded config - you can pack one with the `config repack` command")
+
+	embedded_re = regexp.MustCompile(`#{3}<Begin Embedded Config>\r?\n`)
+
+	EmbeddedFile = ""
 )
 
 // A hard error causes the loader to stop immediately.
@@ -166,28 +174,6 @@ func (self *Loader) WithRequiredUser() *Loader {
 						"Please change user with sudo first.",
 					config_obj.Frontend.RunAsUser, user.Username)
 			}
-			return nil
-		}})
-	return self
-}
-
-func (self *Loader) WithOverride(filename string) *Loader {
-	if filename == "" {
-		return self
-	}
-
-	self = self.Copy()
-	self.config_mutators = append(self.config_mutators, configMutator{
-		name: "WithOverride",
-		config_mutator_func: func(config_obj *config_proto.Config) error {
-			self.Log("Loading override config from file %v", filename)
-			override, err := read_config_from_file(filename)
-			if err != nil {
-				return HardError{err}
-			}
-
-			// Merge the json blob with the config
-			proto.Merge(config_obj, override)
 			return nil
 		}})
 	return self
@@ -346,16 +332,36 @@ func (self *Loader) WithEnvLiteralLoader(env_var string) *Loader {
 	return self
 }
 
-func (self *Loader) WithEmbedded() *Loader {
+func (self *Loader) WithEmbedded(embedded_file string) *Loader {
 	self = self.Copy()
 	self.loaders = append(self.loaders, loaderFunction{
 		name: "WithEmbedded",
 		loader_func: func(self *Loader) (*config_proto.Config, error) {
-			result, err := read_embedded_config()
-			if err == nil {
+			if embedded_file == "" {
+				result, err := read_embedded_config()
+				if err != nil {
+					return nil, err
+				}
+
 				self.Log("Loaded embedded config")
+
+				EmbeddedFile, err = os.Executable()
+				return result, err
+			}
+			// Ensure the "me" accessor uses this file for embedded zip.
+			full_path, err := filepath.Abs(embedded_file)
+			if err != nil {
+				return nil, err
+			}
+
+			EmbeddedFile = full_path
+
+			result, err := ExtractEmbeddedConfig(full_path)
+			if err == nil {
+				self.Log("Loaded embedded config from %v", full_path)
 			}
 			return result, err
+
 		}})
 	return self
 }
@@ -396,6 +402,7 @@ func (self *Loader) WithEnvApiLoader(env_var string) *Loader {
 func (self *Loader) Copy() *Loader {
 	return &Loader{
 		verbose:         self.verbose,
+		use_writeback:   self.use_writeback,
 		logger:          self.logger,
 		loaders:         append([]loaderFunction{}, self.loaders...),
 		validators:      append([]validatorFunction{}, self.validators...),
@@ -476,11 +483,19 @@ func (self *Loader) Validate(config_obj *config_proto.Config) error {
 	}
 
 	if config_obj.Client != nil {
+		// We only use the writeback for certain cases where is it
+		// needed:
+		// - Running as a client, pool client , service etc
+		//
+		// Other cases do not use the writeback and will fail to write
+		// on it. This stops us randomly writing the writeback when
+		// e.g. run as a command line tool, offline collector etc.
+		//
+		// The main programs will set this via WithWriteback()
+		// directive when they prepare the config loader.
 		if self.use_writeback {
-			err := self.loadWriteback(config_obj)
-			if err != nil {
-				return err
-			}
+			writeback_service := writeback.GetWritebackService()
+			writeback_service.LoadWriteback(config_obj)
 		}
 		err := ValidateClientConfig(config_obj)
 		if err != nil {
@@ -507,42 +522,6 @@ func (self *Loader) LoadAndValidate() (*config_proto.Config, error) {
 		self.Log("%v", err)
 	}
 	return nil, errors.New("Unable to load config from any source.")
-}
-
-func read_embedded_config() (*config_proto.Config, error) {
-	// Get the first line which is never disturbed
-	idx := bytes.IndexByte(FileConfigDefaultYaml, '\n')
-
-	// If the following line still starts with # then the file is not
-	// repacked - the repacker will replace all further data with the
-	// compressed string.
-	if FileConfigDefaultYaml[idx+1] == '#' {
-		return nil, errors.New(
-			"No embedded config - you can pack one with the `config repack` command")
-	}
-
-	// Decompress the rest of the data - note that zlib will ignore
-	// any padding anyway because the zlib header already contains the
-	// length of the compressed data so it is safe to just feed it the
-	// whole string here.
-	r, err := zlib.NewReader(bytes.NewReader(FileConfigDefaultYaml[idx+1:]))
-	if err != nil {
-		return nil, err
-	}
-
-	b := &bytes.Buffer{}
-	_, err = io.Copy(b, r)
-	if err != nil {
-		return nil, err
-	}
-	r.Close()
-
-	result := &config_proto.Config{}
-	err = yaml.Unmarshal(b.Bytes(), result)
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
 }
 
 func read_config_from_file(filename string) (*config_proto.Config, error) {

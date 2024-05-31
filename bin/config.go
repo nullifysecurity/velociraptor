@@ -1,19 +1,19 @@
 /*
-   Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+Velociraptor - Dig Deeper
+Copyright (C) 2019-2024 Rapid7 Inc.
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published
-   by the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package main
 
@@ -35,11 +35,13 @@ import (
 	"www.velocidex.com/golang/velociraptor/config"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/crypto"
-	"www.velocidex.com/golang/velociraptor/crypto/utils"
+	crypto_utils "www.velocidex.com/golang/velociraptor/crypto/utils"
 	"www.velocidex.com/golang/velociraptor/json"
 	"www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/services"
+	"www.velocidex.com/golang/velociraptor/services/users"
 	"www.velocidex.com/golang/velociraptor/startup"
+	"www.velocidex.com/golang/velociraptor/utils"
 )
 
 var (
@@ -105,20 +107,20 @@ var (
 		File()
 
 	config_rotate_server_key = config_command.Command(
-		"rotate_key",
-		"Generate a new config file with a rotates server key.")
+		"rotate_keys",
+		"Regenerate server private keys and reissue certificates.")
 
-	config_rotate_server_key_valitidy = config_rotate_server_key.Flag(
+	config_rotate_server_key_validity = config_rotate_server_key.Flag(
 		"validity",
-		"How long should the cert be valid from in days (default 365).").Int64()
+		"How long should the new certs be valid for in days (default 365).").Int64()
 
 	config_reissue_server_key = config_command.Command(
-		"reissue_key",
-		"Reissue all certificates with the same keys.")
+		"reissue_certs",
+		"Reissue server certificates for the existing private keys.")
 
-	config_reissue_server_key_valitidy = config_reissue_server_key.Flag(
+	config_reissue_server_key_validity = config_reissue_server_key.Flag(
 		"validity",
-		"How long should the cert be valid from in days (default 365).").Int64()
+		"How long should the new certs be valid for in days (default 365).").Int64()
 )
 
 func maybeGetOrgConfig(
@@ -220,7 +222,7 @@ func generateNewKeys(config_obj *config_proto.Config) error {
 	// have a constant common name - clients will refuse to talk
 	// with another common name.
 	frontend_cert, err := crypto.GenerateServerCert(
-		config_obj, config_obj.Client.PinnedServerName)
+		config_obj, utils.GetSuperuserName(config_obj))
 	if err != nil {
 		return fmt.Errorf("Unable to create Frontend cert: %w", err)
 	}
@@ -230,7 +232,7 @@ func generateNewKeys(config_obj *config_proto.Config) error {
 
 	// Generate gRPC gateway certificate.
 	gw_certificate, err := crypto.GenerateServerCert(
-		config_obj, config_obj.API.PinnedGwName)
+		config_obj, utils.GetGatewayName(config_obj))
 	if err != nil {
 		return fmt.Errorf("Unable to create Frontend cert: %w", err)
 	}
@@ -282,16 +284,16 @@ func doRotateKeyConfig() error {
 		return err
 	}
 
-	if *config_rotate_server_key_valitidy > 0 {
+	if *config_rotate_server_key_validity > 0 {
 		if config_obj.Defaults == nil {
 			config_obj.Defaults = &config_proto.Defaults{}
 		}
-		config_obj.Defaults.CertificateValidityDays = *config_rotate_server_key_valitidy
+		config_obj.Defaults.CertificateValidityDays = *config_rotate_server_key_validity
 	}
 
 	// Frontends must have a well known common name.
 	frontend_cert, err := crypto.GenerateServerCert(
-		config_obj, config_obj.Client.PinnedServerName)
+		config_obj, utils.GetSuperuserName(config_obj))
 	if err != nil {
 		return fmt.Errorf("Unable to create Frontend cert: %w", err)
 	}
@@ -301,7 +303,7 @@ func doRotateKeyConfig() error {
 
 	// Generate gRPC gateway certificate.
 	gw_certificate, err := crypto.GenerateServerCert(
-		config_obj, config_obj.API.PinnedGwName)
+		config_obj, utils.GetGatewayName(config_obj))
 	if err != nil {
 		return err
 	}
@@ -327,11 +329,11 @@ func doReissueServerKeys() error {
 		return err
 	}
 
-	if *config_reissue_server_key_valitidy > 0 {
+	if *config_reissue_server_key_validity > 0 {
 		if config_obj.Defaults == nil {
 			config_obj.Defaults = &config_proto.Defaults{}
 		}
-		config_obj.Defaults.CertificateValidityDays = *config_reissue_server_key_valitidy
+		config_obj.Defaults.CertificateValidityDays = *config_reissue_server_key_validity
 	}
 
 	logger := logging.GetLogger(config_obj, &logging.ToolComponent)
@@ -422,9 +424,9 @@ func doDumpApiClientConfig() error {
 		return err
 	}
 
-	if *config_api_client_common_name == config_obj.Client.PinnedServerName {
-		return errors.New("Name reserved! You may not name your " +
-			"api keys with this name.")
+	err = users.ValidateUsername(config_obj, *config_api_client_common_name)
+	if err != nil {
+		return err
 	}
 
 	if config_obj.Client == nil {
@@ -475,7 +477,7 @@ func doDumpApiClientConfig() error {
 
 	// Possibly dump out the pkcs12 key
 	if *config_api_client_pkcs12_output != "" {
-		ca_cert, err := utils.ParseX509CertFromPemStr([]byte(
+		ca_cert, err := crypto_utils.ParseX509CertFromPemStr([]byte(
 			config_obj.Client.CaCertificate))
 		if err != nil {
 			return err
@@ -550,7 +552,8 @@ func doDumpApiClientConfig() error {
 
 		// Make sure the user actually exists.
 		user_manager := services.GetUserManager()
-		_, err = user_manager.GetUser(ctx, *config_api_client_common_name)
+		_, err = user_manager.GetUser(ctx,
+			utils.GetSuperuserName(config_obj), *config_api_client_common_name)
 		if err != nil {
 			// Need to ensure we have a user
 			err := user_manager.SetUser(ctx, &api_proto.VelociraptorUser{

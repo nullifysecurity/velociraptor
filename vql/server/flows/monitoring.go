@@ -1,19 +1,19 @@
 /*
-   Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+Velociraptor - Dig Deeper
+Copyright (C) 2019-2024 Rapid7 Inc.
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published
-   by the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package flows
 
@@ -35,6 +35,19 @@ import (
 	"www.velocidex.com/golang/vfilter/arg_parser"
 )
 
+type MonitoringPluginArgs struct {
+	ClientId string `vfilter:"required,field=client_id,doc=The client id to extract"`
+
+	Artifact string `vfilter:"required,field=artifact,doc=The name of the event artifact to read"`
+	Source   string `vfilter:"optional,field=source,doc=An optional named source within the artifact"`
+
+	StartTime vfilter.Any `vfilter:"optional,field=start_time,doc=Start return events from this date (for event sources)"`
+	EndTime   vfilter.Any `vfilter:"optional,field=end_time,doc=Stop end events reach this time (event sources)."`
+
+	StartRow int64 `vfilter:"optional,field=start_row,doc=Start reading the result set from this row"`
+	Limit    int64 `vfilter:"optional,field=count,doc=Maximum number of clients to fetch (default unlimited)'"`
+}
+
 type MonitoringPlugin struct{}
 
 func (self MonitoringPlugin) Call(
@@ -52,11 +65,7 @@ func (self MonitoringPlugin) Call(
 			return
 		}
 
-		arg := &SourcePluginArgs{}
-
-		// Allow the plugin to be filled in from the environment. Arg
-		// parser will override the environment with the actual args.
-		ParseSourceArgsFromScope(arg, scope)
+		arg := &MonitoringPluginArgs{}
 
 		err = arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
 		if err != nil {
@@ -66,7 +75,7 @@ func (self MonitoringPlugin) Call(
 
 		config_obj, ok := vql_subsystem.GetServerConfig(scope)
 		if !ok {
-			scope.Log("Command can only run on the server")
+			scope.Log("monitoring: Command can only run on the server")
 			return
 		}
 
@@ -78,7 +87,7 @@ func (self MonitoringPlugin) Call(
 		}
 
 		path_manager, err := artifact_paths.NewArtifactPathManager(ctx,
-			config_obj, arg.ClientId, arg.FlowId, arg.Artifact)
+			config_obj, arg.ClientId, "", arg.Artifact)
 		if err != nil {
 			scope.Log("monitoring: %v", err)
 			return
@@ -93,7 +102,7 @@ func (self MonitoringPlugin) Call(
 		}
 
 		if !utils.IsNil(arg.StartTime) {
-			start, err := functions.TimeFromAny(scope, arg.StartTime)
+			start, err := functions.TimeFromAny(ctx, scope, arg.StartTime)
 			if err == nil {
 				err = reader.SeekToTime(start)
 				if err != nil {
@@ -104,7 +113,7 @@ func (self MonitoringPlugin) Call(
 		}
 
 		if !utils.IsNil(arg.EndTime) {
-			end, err := functions.TimeFromAny(scope, arg.EndTime)
+			end, err := functions.TimeFromAny(ctx, scope, arg.EndTime)
 			if err == nil {
 				reader.SetMaxTime(end)
 			}
@@ -131,16 +140,15 @@ func (self MonitoringPlugin) Call(
 
 func (self MonitoringPlugin) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) *vfilter.PluginInfo {
 	return &vfilter.PluginInfo{
-		Name: "monitoring",
-		Doc: "Extract monitoring log from a client. If client_id is not specified " +
-			"we watch the global journal which contains event logs from all clients.",
-		ArgType:  type_map.AddType(scope, &SourcePluginArgs{}),
+		Name:     "monitoring",
+		Doc:      "Read event monitoring log from a client (i.e. that was collected using client event artifacts).",
+		ArgType:  type_map.AddType(scope, &MonitoringPluginArgs{}),
 		Metadata: vql.VQLMetadata().Permissions(acls.READ_RESULTS).Build(),
 	}
 }
 
 type WatchMonitoringPluginArgs struct {
-	Artifact string `vfilter:"optional,field=artifact,doc=The artifact to watch"`
+	Artifact string `vfilter:"required,field=artifact,doc=The artifact to watch"`
 }
 
 // The watch_monitoring plugin watches for new rows written to the
@@ -164,7 +172,7 @@ func (self WatchMonitoringPlugin) Call(
 
 		config_obj, ok := vql_subsystem.GetServerConfig(scope)
 		if !ok {
-			scope.Log("Command can only run on the server")
+			scope.Log("watch_monitoring: Command can only run on the server")
 			return
 		}
 

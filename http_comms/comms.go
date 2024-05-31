@@ -1,6 +1,6 @@
 /*
 Velociraptor - Dig Deeper
-Copyright (C) 2019-2022 Rapid7 Inc.
+Copyright (C) 2019-2024 Rapid7 Inc.
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published
@@ -41,9 +41,11 @@ import (
 	"www.velocidex.com/golang/velociraptor/constants"
 	"www.velocidex.com/golang/velociraptor/crypto"
 	crypto_proto "www.velocidex.com/golang/velociraptor/crypto/proto"
+	"www.velocidex.com/golang/velociraptor/crypto/storage"
 	"www.velocidex.com/golang/velociraptor/executor"
 	"www.velocidex.com/golang/velociraptor/json"
 	"www.velocidex.com/golang/velociraptor/logging"
+	"www.velocidex.com/golang/velociraptor/services/writeback"
 	"www.velocidex.com/golang/velociraptor/utils"
 	"www.velocidex.com/golang/velociraptor/vql/networking"
 )
@@ -60,6 +62,8 @@ var (
 	Rand func(int) int = rand.Intn
 
 	proxyHandler = http.ProxyFromEnvironment
+
+	MaxRetryCount = 2
 )
 
 // Responsible for maybe enrolling the client. Enrollments should not
@@ -149,6 +153,7 @@ type HTTPConnector struct {
 	// server immediately and keep accessing that server until the
 	// an error occurs or we are further redirected.
 	redirect_to_server int
+	nanny              *executor.NannyService
 
 	clock utils.Clock
 }
@@ -158,6 +163,7 @@ func NewHTTPConnector(
 	manager crypto.IClientCryptoManager,
 	logger *logging.LogContext,
 	urls []string,
+	nanny *executor.NannyService,
 	clock utils.Clock) (*HTTPConnector, error) {
 
 	if config_obj.Client == nil {
@@ -187,7 +193,7 @@ func NewHTTPConnector(
 		// server. This setting also allows the server to be accessed
 		// by e.g. localhost despite the certificate being issued to
 		// VelociraptorServer.
-		transport.TLSClientConfig.ServerName = config_obj.Client.PinnedServerName
+		transport.TLSClientConfig.ServerName = utils.GetSuperuserName(config_obj)
 	} else {
 		// Not self signed - add the public roots for verifications.
 		crypto.AddPublicRoots(transport.TLSClientConfig.RootCAs)
@@ -208,15 +214,10 @@ func NewHTTPConnector(
 		maxPoll:    time.Duration(max_poll) * time.Second,
 		maxPollDev: maxPollDev,
 
-		urls: urls,
+		urls:  urls,
+		nanny: nanny,
 
-		client: &http.Client{
-			// Let us handle redirect ourselves.
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-			Transport: transport,
-		},
+		client: NewHTTPClient(config_obj, transport, nanny),
 	}
 
 	return self, nil
@@ -235,10 +236,9 @@ func (self *HTTPConnector) GetCurrentUrl(handler string) string {
 	return self.urls[self.current_url_idx] + handler
 }
 
-func (self *HTTPConnector) Post(
+func (self *HTTPConnector) prepareRequest(
 	ctx context.Context, name, handler string,
-	data []byte, urgent bool) (*bytes.Buffer, error) {
-
+	data []byte, urgent bool) (*http.Request, error) {
 	reader := bytes.NewReader(data)
 	req, err := http.NewRequestWithContext(ctx,
 		"POST", self.GetCurrentUrl(handler), reader)
@@ -267,8 +267,84 @@ func (self *HTTPConnector) Post(
 		req.Header.Set("X-Priority", "urgent")
 	}
 
+	return req, nil
+}
+
+// Implement retry behavior so we can retry some errors
+// immediately. This avoids having to backoff for temporary errors.
+func (self *HTTPConnector) retryPost(
+	ctx context.Context, name, handler string,
+	data []byte, urgent bool) (resp *http.Response, err error) {
+
+	logger := logging.GetLogger(self.config_obj, &logging.ClientComponent)
+	count := 0
+
+	for {
+		req, err := self.prepareRequest(ctx, name, handler, data, urgent)
+		if err != nil {
+			return nil, err
+		}
+
+		resp, err = self.client.Do(req)
+		// Represents a retryable error in websockets.
+		if resp != nil {
+			switch resp.StatusCode {
+
+			// 408 is infinitely retryable as it indicates the server
+			// closed the connection.
+			case http.StatusRequestTimeout:
+				logger.Debug("%v: Retrying connection to %v: Status %v",
+					name, handler, resp.StatusCode)
+				continue
+
+				// 503 is retryable a couple times.
+			case http.StatusServiceUnavailable:
+				logger.Debug("%v: Retrying connection to %v: Status %v, %v",
+					name, handler, resp.StatusCode, resp.Status)
+
+				count++
+				continue
+			}
+		}
+
+		// Try to connect a couple times before giving up.
+		if err == notConnectedError {
+			logger.Debug("%v: Retrying connection to %v: %v",
+				name, handler, notConnectedError)
+			count++
+			continue
+		}
+
+		// No errors - we are good!
+		if resp != nil && err == nil {
+			return resp, err
+		}
+
+		if count > MaxRetryCount {
+			logger.Debug("%v: Exceeded retry times for %v",
+				name, handler)
+			break
+		}
+
+		logger.Debug("%v: Retrying connection to %v for %v time",
+			name, handler, count)
+		count++
+	}
+
+	// Should not happen unless we messed up the logic above.
+	if resp == nil && err == nil {
+		err = notConnectedError
+	}
+
+	return resp, err
+}
+
+func (self *HTTPConnector) Post(
+	ctx context.Context, name, handler string,
+	data []byte, urgent bool) (*bytes.Buffer, error) {
+
 	now := utils.GetTime().Now()
-	resp, err := self.client.Do(req)
+	resp, err := self.retryPost(ctx, name, handler, data, urgent)
 	if resp != nil {
 		defer resp.Body.Close()
 	}
@@ -283,7 +359,7 @@ func (self *HTTPConnector) Post(
 	}
 
 	self.logger.Info("%s: sent %d bytes, response with status: %v after %v, waiting for server messages",
-		name, len(data), resp.Status, utils.GetTime().Now().Sub(now))
+		name, len(data), resp.StatusCode, utils.GetTime().Now().Sub(now))
 
 	// Handle redirect. Frontends may redirect us to other
 	// frontends.
@@ -344,6 +420,21 @@ func (self *HTTPConnector) Post(
 		}
 
 		return nil, RedirectError
+
+		// This error means something went wrong in processing the
+		// message we sent - we do not want to retry sending this
+		// message because the server already attempted to process it
+		// but it didnt work for some reason.
+	case 400:
+		data := &bytes.Buffer{}
+		_, err := utils.Copy(ctx, data, resp.Body)
+		if err != nil {
+			return nil, errors.Wrap(err, 0)
+		}
+
+		self.logger.Error("%s: Error: %v %v", name, resp.Status, string(data.Bytes()))
+
+		return &bytes.Buffer{}, nil
 
 	case 406:
 		return nil, EnrolError
@@ -406,9 +497,9 @@ func (self *HTTPConnector) advanceToNextServer(ctx context.Context) {
 
 		// While we wait to reconnect we need to update the nanny or
 		// we get killed.
-		if executor.Nanny != nil {
-			executor.Nanny.UpdatePumpRbToServer()
-			executor.Nanny.UpdateReadFromServer()
+		if self.nanny != nil {
+			self.nanny.UpdatePumpRbToServer()
+			self.nanny.UpdateReadFromServer()
 		}
 
 		// Release the lock while we wait.
@@ -476,6 +567,27 @@ func (self *HTTPConnector) rekeyNextServer(ctx context.Context) error {
 	// Try to fetch the server pem.
 	url := self.urls[self.current_url_idx]
 
+	// Try to get the server.pem over plain https
+	if strings.HasPrefix(url, "wss://") {
+		url = strings.Replace(url, "wss://", "https://", 1)
+		err := self.rekeyWithURL(ctx, url)
+		if err == nil {
+			return nil
+		}
+	}
+
+	if strings.HasPrefix(url, "ws://") {
+		url = strings.Replace(url, "ws://", "http://", 1)
+		err := self.rekeyWithURL(ctx, url)
+		if err == nil {
+			return nil
+		}
+	}
+
+	return self.rekeyWithURL(ctx, url)
+}
+
+func (self *HTTPConnector) rekeyWithURL(ctx context.Context, url string) error {
 	req, err := http.NewRequest("GET", url+"server.pem", nil)
 	if err != nil {
 		return errors.Wrap(err, 0)
@@ -502,12 +614,15 @@ func (self *HTTPConnector) rekeyNextServer(ctx context.Context) error {
 	}
 
 	if resp.StatusCode != 200 {
-		return errors.New("Invalid status while downloading PEM")
+		err = errors.New("Invalid status while downloading PEM")
+		self.logger.Info("While getting %v: %v (%d)", url, err, resp.StatusCode)
+		return err
 	}
 
 	pem, err := ioutil.ReadAll(io.LimitReader(resp.Body, constants.MAX_MEMORY))
 	if err != nil {
 		self.server_name = ""
+		self.logger.Info("While reading %v: %v", url, err)
 		return errors.Wrap(err, 0)
 	}
 
@@ -522,7 +637,7 @@ func (self *HTTPConnector) rekeyNextServer(ctx context.Context) error {
 
 	// We must be talking to the server! The server certificate
 	// must have this common name.
-	if server_name != self.config_obj.Client.PinnedServerName {
+	if server_name != utils.GetSuperuserName(self.config_obj) {
 		self.server_name = ""
 		self.logger.Info("Invalid server certificate common name %v!", server_name)
 		return errors.New("Invalid server certificate common name!")
@@ -531,7 +646,21 @@ func (self *HTTPConnector) rekeyNextServer(ctx context.Context) error {
 	self.server_name = server_name
 	self.logger.Info("Received PEM for %v from %v", self.server_name, url)
 
-	return nil
+	storage.SetCurrentServerPem(pem)
+
+	// Also write the server pem to the writeback if needed.
+	err = writeback.GetWritebackService().MutateWriteback(self.config_obj,
+		func(wb *config_proto.Writeback) error {
+			server_pem := string(pem)
+			if wb.LastServerPem == server_pem {
+				return writeback.WritebackNoUpdate
+			}
+
+			wb.LastServerPem = server_pem
+			return nil
+		})
+
+	return err
 }
 
 // Manages reading jobs from the reader notification channel.
@@ -639,7 +768,7 @@ func (self *NotificationReader) sendMessageList(
 
 	for {
 		if atomic.LoadInt32(&self.IsPaused) == 0 {
-			err := self.sendToURL(ctx, message_list, urgent, compression)
+			err := self.SendToURL(ctx, message_list, urgent, compression)
 			// Success!
 			if err == nil {
 				return
@@ -670,10 +799,8 @@ func (self *NotificationReader) sendMessageList(
 
 		// While we wait to reconnect we need to update the nanny or
 		// we get killed.
-		if executor.Nanny != nil {
-			executor.Nanny.UpdatePumpRbToServer()
-			executor.Nanny.UpdateReadFromServer()
-		}
+		self.executor.Nanny().UpdatePumpRbToServer()
+		self.executor.Nanny().UpdateReadFromServer()
 
 		select {
 		case <-ctx.Done():
@@ -685,7 +812,7 @@ func (self *NotificationReader) sendMessageList(
 
 }
 
-func (self *NotificationReader) sendToURL(
+func (self *NotificationReader) SendToURL(
 	ctx context.Context,
 	message_list [][]byte,
 	urgent bool,
@@ -787,7 +914,7 @@ func (self *NotificationReader) Start(
 
 		// Periodically read from executor and push to ring buffer.
 		for {
-			executor.Nanny.UpdateReadFromServer()
+			self.executor.Nanny().UpdateReadFromServer()
 
 			// The Reader does not send any server bound
 			// messages - it is blocked reading server
@@ -878,7 +1005,7 @@ type HTTPCommunicator struct {
 	enroller *Enroller
 
 	// Sends results back to the server.
-	sender *Sender
+	Sender *Sender
 
 	// Will be called when we exit the communicator.
 	on_exit func()
@@ -891,7 +1018,7 @@ func (self *HTTPCommunicator) SetPause(is_paused bool) {
 	if is_paused {
 		value = 1
 	}
-	atomic.StoreInt32(&self.sender.IsPaused, value)
+	atomic.StoreInt32(&self.Sender.IsPaused, value)
 	atomic.StoreInt32(&self.receiver.IsPaused, value)
 }
 
@@ -901,7 +1028,7 @@ func (self *HTTPCommunicator) Run(
 	self.logger.Info("Starting HTTPCommunicator: %v", self.receiver.connector)
 
 	self.receiver.Start(ctx, wg)
-	self.sender.Start(ctx, wg)
+	self.Sender.Start(ctx, wg)
 
 	<-ctx.Done()
 }
@@ -923,7 +1050,17 @@ func NewHTTPCommunicator(
 		logger:     logger,
 		clock:      clock,
 	}
-	connector, err := NewHTTPConnector(config_obj, crypto_manager, logger, urls, clock)
+
+	// Shuffle the list of URLs so that if a server goes down,
+	// clients will be distributed better accross
+	// the remaining servers.
+	rand.Seed(utils.GetTime().Now().UnixNano())
+	rand.Shuffle(len(urls), func(i, j int) {
+		urls[i], urls[j] = urls[j], urls[i]
+	})
+	connector, err := NewHTTPConnector(
+		config_obj, crypto_manager, logger, urls,
+		executor.Nanny(), clock)
 	if err != nil {
 		return nil, err
 	}
@@ -1012,7 +1149,7 @@ func NewHTTPCommunicator(
 			clock:      clock,
 		},
 		on_exit:  on_exit,
-		sender:   sender,
+		Sender:   sender,
 		receiver: receiver,
 		Manager:  crypto_manager,
 	}
@@ -1025,6 +1162,13 @@ func SetProxy(handler func(*http.Request) (*url.URL, error)) {
 	defer mu.Unlock()
 
 	proxyHandler = handler
+}
+
+func GetProxy() func(*http.Request) (*url.URL, error) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	return proxyHandler
 }
 
 func init() {

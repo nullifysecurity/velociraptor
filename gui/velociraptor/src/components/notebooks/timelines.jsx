@@ -6,7 +6,8 @@ import _ from 'lodash';
 import {CancelToken} from 'axios';
 import api from '../core/api-service.jsx';
 
-import parse from 'html-react-parser';
+import parseHTML from '../core/sanitize.jsx';
+
 import Modal from 'react-bootstrap/Modal';
 import CreatableSelect from 'react-select/creatable';
 import Select from 'react-select';
@@ -16,6 +17,7 @@ import Col from 'react-bootstrap/Col';
 import Row from 'react-bootstrap/Row';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { ToStandardTime } from '../utils/time.jsx';
+import { JSONparse } from '../utils/json_parse.jsx';
 
 import T from '../i8n/i8n.jsx';
 
@@ -116,12 +118,12 @@ export class AddVQLCellToTimeline extends React.Component {
     getTables = ()=>{
         let tags = [];
 
-        parse(this.props.cell.output, {
+        parseHTML(this.props.cell.output, {
             replace: (domNode) => {
                 if (domNode.name === "grr-csv-viewer") {
-                    try {
-                        tags.push(JSON.parse(decodeURIComponent(domNode.attribs.params)));
-                    } catch(e) { }
+                    let value = JSONparse(
+                        decodeURIComponent(domNode.attribs.params), "");
+                    tags.push(value);
                 };
                 return domNode;
             }

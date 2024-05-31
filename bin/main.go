@@ -1,35 +1,38 @@
 /*
-   Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+Velociraptor - Dig Deeper
+Copyright (C) 2019-2024 Rapid7 Inc.
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published
-   by the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package main
 
 import (
 	"crypto/x509"
 	"encoding/pem"
+	"fmt"
 	"os"
 	"runtime/pprof"
 	"runtime/trace"
 
 	"github.com/AlecAivazis/survey/v2"
+	kingpin "github.com/alecthomas/kingpin/v2"
 	errors "github.com/go-errors/errors"
-	kingpin "gopkg.in/alecthomas/kingpin.v2"
 	"www.velocidex.com/golang/velociraptor/config"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/logging"
+	"www.velocidex.com/golang/velociraptor/utils"
+	"www.velocidex.com/golang/velociraptor/utils/proxy"
 
 	// Import all vql plugins.
 	_ "www.velocidex.com/golang/velociraptor/vql_plugins"
@@ -43,6 +46,9 @@ var (
 
 	config_path = app.Flag("config", "The configuration file.").
 			Short('c').String()
+
+	embedded_config_path = app.Flag("embedded_config", "Extract the embedded configuration from this file.").String()
+
 	api_config_path = app.Flag("api_config", "The API configuration file.").
 			Short('a').String()
 
@@ -122,6 +128,11 @@ var (
 func main() {
 	app.HelpFlag.Short('h')
 	app.UsageTemplate(kingpin.CompactUsageTemplate)
+	app.Terminate(func(s int) {
+		doPrompt()
+		os.Exit(s)
+	})
+
 	args := os.Args[1:]
 
 	// If no args are given check if there is an embedded config
@@ -129,19 +140,24 @@ func main() {
 	pre, post := splitArgs(args)
 	if len(pre) == 0 {
 		config_obj, err := new(config.Loader).WithVerbose(*verbose_flag).
-			WithEmbedded().LoadAndValidate()
+			WithEmbedded(*embedded_config_path).LoadAndValidate()
 		if err == nil && config_obj.Autoexec != nil && config_obj.Autoexec.Argv != nil {
 			args = nil
 			for _, arg := range config_obj.Autoexec.Argv {
-				args = append(args, os.ExpandEnv(arg))
+				args = append(args, utils.ExpandEnv(arg))
 			}
 			args = append(args, post...)
 			logging.Prelog("Autoexec with parameters: %v", args)
 		}
 	}
 
+	// Log the actual argv that will be run.
+	err := logArgv(append([]string{os.Args[0]}, args...))
+	if err != nil {
+		fmt.Printf("Error sending to the event log: %v\n", err)
+	}
+
 	// Automatically add config flags
-	var err error
 	default_config, err = parseFlagsToDefaultConfig(app)
 	kingpin.FatalIfError(err, "Adding config flags.")
 
@@ -163,7 +179,7 @@ func main() {
 		WithCustomValidator("Validator maybe_unlock_api_config",
 			maybe_unlock_api_config).
 		WithFileLoader(*config_path).
-		WithEmbedded().
+		WithEmbedded(*embedded_config_path).
 		WithEnvLoader("VELOCIRAPTOR_CONFIG").
 		WithConfigMutator("Mutator mergeFlagConfig",
 			func(config_obj *config_proto.Config) error {
@@ -176,7 +192,7 @@ func main() {
 		WithConfigMutator("Mutator: applyMinionRole", applyMinionRole).
 		WithCustomValidator("validator: applyAnalysisTarget",
 			applyAnalysisTarget).
-		WithOverride(*override_flag).
+		WithConfigMutator("OverrideFlag", deprecatedOverride).
 		WithLogFile(*logging_flag).
 		WithConfigMutator("Mutator maybeAddDefinitionsDirectory", maybeAddDefinitionsDirectory)
 
@@ -210,7 +226,7 @@ func makeDefaultConfigLoader() *config.Loader {
 		WithVerbose(*verbose_flag).
 		WithTempdir(*tempdir_flag).
 		WithFileLoader(*config_path).
-		WithEmbedded().
+		WithEmbedded(*embedded_config_path).
 		WithEnvLoader("VELOCIRAPTOR_CONFIG").
 		WithConfigMutator("Mutator mergeFlagConfig",
 			func(config_obj *config_proto.Config) error {
@@ -221,9 +237,9 @@ func makeDefaultConfigLoader() *config.Loader {
 		WithCustomValidator("validator: initDebugServer", initDebugServer).
 		WithCustomValidator("validator: timezone", initTimezone).
 		WithLogFile(*logging_flag).
-		WithOverride(*override_flag).
+		WithConfigMutator("OverrideFlag", deprecatedOverride).
 		WithConfigMutator("Mutator applyMinionRole", applyMinionRole).
-		WithCustomValidator("validator: ensureProxy", ensureProxy).
+		WithCustomValidator("validator: ensureProxy", proxy.ConfigureProxy).
 		WithConfigMutator("Mutator applyAnalysisTarget", applyAnalysisTarget).
 		WithConfigMutator("Mutator maybeAddDefinitionsDirectory", maybeAddDefinitionsDirectory)
 }
@@ -231,10 +247,19 @@ func makeDefaultConfigLoader() *config.Loader {
 // Split the command line into args before the -- and after the --
 func splitArgs(args []string) (pre, post []string) {
 	seen := false
-	for _, arg := range args {
+	for idx := 0; idx < len(args); idx++ {
+		arg := args[idx]
+
+		// Separate the args into pre and post args. Post args will be
+		// added to the autoexec command line while still triggering
+		// the autoexec condition.
 		if arg == "--" {
 			seen = true
 			continue
+		}
+
+		if arg == "--embedded_config" && idx < len(args) {
+			embedded_config_path = &args[idx+1]
 		}
 
 		if seen {

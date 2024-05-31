@@ -1,6 +1,6 @@
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+   Copyright (C) 2019-2024 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -193,6 +193,7 @@ func (self *ApiServer) VFSDownloadFile(
 
 	request := &flows_proto.ArtifactCollectorArgs{
 		ClientId:  in.ClientId,
+		Creator:   principal,
 		Urgent:    true,
 		Artifacts: []string{"System.VFS.DownloadFile"},
 		Specs: []*flows_proto.ArtifactSpec{{

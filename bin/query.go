@@ -1,19 +1,19 @@
 /*
-   Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+Velociraptor - Dig Deeper
+Copyright (C) 2019-2024 Rapid7 Inc.
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published
-   by the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package main
 
@@ -153,7 +153,7 @@ func outputCSV(ctx context.Context,
 }
 
 func doRemoteQuery(
-	config_obj *config_proto.Config, format string,
+	config_obj *config_proto.Config, format string, org_id string,
 	queries []string, env *ordereddict.Dict) error {
 
 	logging.DisableLogging()
@@ -161,7 +161,10 @@ func doRemoteQuery(
 	ctx, cancel := install_sig_handler()
 	defer cancel()
 
-	client, closer, err := grpc_client.Factory.GetAPIClient(ctx, config_obj)
+	// Make a remote query using the API - we better have user API
+	// credentials in the config file.
+	client, closer, err := grpc_client.Factory.GetAPIClient(
+		ctx, grpc_client.API_User, config_obj)
 	if err != nil {
 		return err
 	}
@@ -170,7 +173,7 @@ func doRemoteQuery(
 	logger := logging.GetLogger(config_obj, &logging.ToolComponent)
 
 	request := &actions_proto.VQLCollectorArgs{
-		OrgId:    *query_org_id,
+		OrgId:    org_id,
 		MaxRow:   1000,
 		MaxWait:  1,
 		CpuLimit: float32(*query_command_collect_cpu_limit),
@@ -289,7 +292,21 @@ func doQuery() error {
 	if config_obj.ApiConfig != nil && config_obj.ApiConfig.Name != "" {
 		logging.GetLogger(config_obj, &logging.ToolComponent).
 			Info("API Client configuration loaded - will make gRPC connection.")
-		return doRemoteQuery(config_obj, *format, *queries, env)
+		return doRemoteQuery(
+			config_obj, *format, *query_org_id, *queries, env)
+	}
+
+	if *query_org_id != "" {
+		org_manager, err := services.GetOrgManager()
+		if err != nil {
+			return err
+		}
+
+		org_config_obj, err := org_manager.GetOrgConfig(*query_org_id)
+		if err != nil {
+			return err
+		}
+		config_obj = org_config_obj
 	}
 
 	// Initialize the repository in case the artifacts use it
@@ -298,10 +315,11 @@ func doQuery() error {
 		return fmt.Errorf("Artifact GetGlobalRepository: %w ", err)
 	}
 
+	logger := &LogWriter{config_obj: config_obj}
 	builder := services.ScopeBuilder{
 		Config:     config_obj,
 		ACLManager: acl_managers.NullACLManager{},
-		Logger:     log.New(&LogWriter{config_obj}, "", 0),
+		Logger:     log.New(logger, "", 0),
 		Env:        ordereddict.NewDict(),
 	}
 
@@ -417,7 +435,7 @@ func doQuery() error {
 			}
 		}
 	}
-	return nil
+	return logger.Error
 }
 
 func init() {

@@ -8,6 +8,7 @@ import (
 
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
+	flows_proto "www.velocidex.com/golang/velociraptor/flows/proto"
 	"www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/utils"
@@ -18,43 +19,25 @@ func (self *NotebookManager) NewNotebookCell(
 	in *api_proto.NotebookCellRequest, username string) (
 	*api_proto.NotebookMetadata, error) {
 
+	// Calculate the cell first then insert it into the notebook.
+	new_version := GetNextVersion("")
+	new_cell_request := &api_proto.NotebookCellRequest{
+		Input:             in.Input,
+		Output:            in.Output,
+		CellId:            NewNotebookCellId(),
+		NotebookId:        in.NotebookId,
+		Version:           new_version,
+		AvailableVersions: []string{new_version},
+		Type:              in.Type,
+		Env:               in.Env,
+		Sync:              in.Sync,
+
+		// New cells are opened for editing.
+		CurrentlyEditing: true,
+	}
+
+	// TODO: This is not thread safe!
 	notebook, err := self.Store.GetNotebook(in.NotebookId)
-	if err != nil {
-		return nil, err
-	}
-
-	new_cell_md := []*api_proto.NotebookCell{}
-	added := false
-
-	notebook.LatestCellId = NewNotebookCellId()
-
-	for _, cell_md := range notebook.CellMetadata {
-		if cell_md.CellId == in.CellId {
-			// New cell goes above existing cell.
-			new_cell_md = append(new_cell_md, &api_proto.NotebookCell{
-				CellId:    notebook.LatestCellId,
-				Timestamp: time.Now().Unix(),
-			})
-			new_cell_md = append(new_cell_md, &api_proto.NotebookCell{
-				CellId:    cell_md.CellId,
-				Timestamp: time.Now().Unix(),
-			})
-			added = true
-			continue
-		}
-		new_cell_md = append(new_cell_md, cell_md)
-	}
-
-	// Add it to the end of the document.
-	if !added {
-		new_cell_md = append(new_cell_md, &api_proto.NotebookCell{
-			CellId:    notebook.LatestCellId,
-			Timestamp: time.Now().Unix(),
-		})
-	}
-
-	notebook.CellMetadata = new_cell_md
-	err = self.Store.SetNotebook(notebook)
 	if err != nil {
 		return nil, err
 	}
@@ -64,27 +47,131 @@ func (self *NotebookManager) NewNotebookCell(
 		in.Input = "\n\n\n\n\n\n"
 	}
 
-	// Create the new cell with fresh content.
-	new_cell_request := &api_proto.NotebookCellRequest{
-		Input:      in.Input,
-		NotebookId: in.NotebookId,
-		CellId:     notebook.LatestCellId,
-		Type:       in.Type,
-		Env:        in.Env,
-
-		// New cells are opened for editing.
-		CurrentlyEditing: true,
+	new_cell, err := self.UpdateNotebookCell(
+		ctx, notebook, username, new_cell_request)
+	if err != nil {
+		return nil, err
 	}
 
-	_, err = self.UpdateNotebookCell(ctx, notebook, username, new_cell_request)
+	// The notebook only keep summary metadata and not the full
+	// results.
+	new_cell_summary := &api_proto.NotebookCell{
+		CellId:            new_cell.CellId,
+		CurrentVersion:    new_cell.CurrentVersion,
+		AvailableVersions: new_cell.AvailableVersions,
+		Timestamp:         new_cell.Timestamp,
+	}
+
+	added := false
+	now := utils.GetTime().Now().Unix()
+
+	new_cell_md := []*api_proto.NotebookCell{}
+
+	for _, cell_md := range notebook.CellMetadata {
+		if cell_md.CellId == in.CellId {
+
+			// New cell goes above existing cell.
+			new_cell_md = append(new_cell_md, new_cell_summary)
+
+			cell_md.Timestamp = now
+			new_cell_md = append(new_cell_md, cell_md)
+			added = true
+			continue
+		}
+		new_cell_md = append(new_cell_md, cell_md)
+	}
+
+	// Add it to the end of the document.
+	if !added {
+		new_cell_md = append(new_cell_md, new_cell_summary)
+	}
+
+	notebook.LatestCellId = new_cell.CellId
+	notebook.CellMetadata = new_cell_md
+	notebook.ModifiedTime = new_cell.Timestamp
+
+	err = self.Store.SetNotebook(notebook)
+	if err != nil {
+		return nil, err
+	}
+
 	return notebook, err
 }
 
-// Create the initial cells of the notebook.
-func CreateInitialNotebook(ctx context.Context,
+func getInitialCellsFromArtifacts(
+	ctx context.Context,
 	config_obj *config_proto.Config,
-	notebook_metadata *api_proto.NotebookMetadata,
-	principal string) error {
+	in *api_proto.NotebookMetadata) (
+	result []*api_proto.NotebookCellRequest, err error) {
+
+	manager, err := services.GetRepositoryManager(config_obj)
+	if err != nil {
+		return nil, err
+	}
+	repository, err := manager.GetGlobalRepository(config_obj)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, artifact_name := range in.Artifacts {
+		artifact, pres := repository.Get(ctx, config_obj, artifact_name)
+		if !pres {
+			continue
+		}
+
+		for _, s := range artifact.Sources {
+			for _, n := range s.Notebook {
+				env := []*api_proto.Env{}
+				for _, i := range n.Env {
+					env = append(env, &api_proto.Env{
+						Key:   i.Key,
+						Value: i.Value,
+					})
+				}
+
+				switch strings.ToLower(n.Type) {
+				case "none":
+					// Means no cell to be produced.
+					result = append(result, &api_proto.NotebookCellRequest{
+						Type: n.Type,
+					})
+
+				case "vql", "md", "markdown":
+					result = append(result, &api_proto.NotebookCellRequest{
+						Type:   n.Type,
+						Input:  n.Template,
+						Output: n.Output,
+
+						// Need to wait for all cells to calculate or
+						// we will overload the netowork workers if
+						// there are too many.
+						Sync: true,
+					})
+				case "vql_suggestion":
+					in.Suggestions = append(in.Suggestions,
+						&api_proto.NotebookCellRequest{
+							Type:  "vql",
+							Name:  n.Name,
+							Input: n.Template,
+							Env:   env,
+						})
+				}
+			}
+		}
+	}
+	return result, nil
+}
+
+func getInitialCells(
+	ctx context.Context,
+	config_obj *config_proto.Config,
+	notebook_metadata *api_proto.NotebookMetadata) (
+	[]*api_proto.NotebookCellRequest, error) {
+
+	// Initialize the notebook from these artifacts
+	if len(notebook_metadata.Artifacts) > 0 {
+		return getInitialCellsFromArtifacts(ctx, config_obj, notebook_metadata)
+	}
 
 	// All cells receive a header from the name and description of
 	// the notebook.
@@ -114,30 +201,82 @@ func CreateInitialNotebook(ctx context.Context,
 		}
 	}
 
-	notebook_manager, err := services.GetNotebookManager(config_obj)
+	return new_cells, nil
+}
+
+// Create the initial cells of the notebook.
+func (self *NotebookManager) CreateInitialNotebook(ctx context.Context,
+	config_obj *config_proto.Config,
+	notebook_metadata *api_proto.NotebookMetadata,
+	principal string) error {
+
+	new_cell_requests, err := getInitialCells(ctx, config_obj, notebook_metadata)
 	if err != nil {
 		return err
 	}
 
-	for _, cell := range new_cells {
+	// Write the notebook to storage first while we are calculating it.
+	err = self.Store.SetNotebook(notebook_metadata)
+	if err != nil {
+		return err
+	}
+
+	for _, cell_req := range new_cell_requests {
+		// Skip none cells - they are essentially "commented out"
+		if cell_req.Type == "none" {
+			continue
+		}
+
 		new_cell_id := NewNotebookCellId()
 
-		notebook_metadata.CellMetadata = append(
-			notebook_metadata.CellMetadata, &api_proto.NotebookCell{
-				CellId:    new_cell_id,
-				Env:       cell.Env,
-				Timestamp: time.Now().Unix(),
-			})
-		cell.NotebookId = notebook_metadata.NotebookId
-		cell.CellId = new_cell_id
+		cell_req.NotebookId = notebook_metadata.NotebookId
+		cell_req.CellId = new_cell_id
 
-		_, err := notebook_manager.UpdateNotebookCell(
-			ctx, notebook_metadata, principal, cell)
+		// Create the initial version of the cell
+		cell_req.Version = GetNextVersion("")
+		cell_req.AvailableVersions = append(cell_req.AvailableVersions, cell_req.Version)
+
+		cell_metadata := &api_proto.NotebookCell{
+			CellId:            new_cell_id,
+			Env:               cell_req.Env,
+			Input:             cell_req.Input,
+			Output:            cell_req.Output,
+			Calculating:       true,
+			Type:              cell_req.Type,
+			Timestamp:         utils.GetTime().Now().Unix(),
+			CurrentVersion:    cell_req.Version,
+			AvailableVersions: cell_req.AvailableVersions,
+		}
+
+		// Add the new cell to the notebook metadata and fire off the
+		// calculation in the background.
+		notebook_metadata.CellMetadata = append(
+			notebook_metadata.CellMetadata, cell_metadata)
+	}
+
+	var final_err error
+
+	// When we create the notebook we need to wait for all the cells
+	// to be calculated otherwise we will overwhelm the workers.
+	for _, cell_req := range new_cell_requests {
+		if cell_req.Type == "none" {
+			continue
+		}
+
+		cell_req.Sync = true
+		_, err = self.UpdateNotebookCell(
+			ctx, notebook_metadata, principal, cell_req)
 		if err != nil {
-			return err
+			// We failed to create this cell but we should not stop
+			// because this will ignore the next cells. Keep going
+			// anyway otherwise the next cells will be lost.
+			if final_err == nil {
+				final_err = err
+			}
 		}
 	}
-	return nil
+
+	return final_err
 }
 
 func getCellsForEvents(ctx context.Context,
@@ -161,13 +300,13 @@ func getCellsForEvents(ctx context.Context,
 	// If there are no custom cells, add the default cell.
 	if len(result) == 0 {
 		// Start the event display 1 day ago.
-		start_time := time.Now().AddDate(0, 0, -1).UTC().Format(time.RFC3339)
+		start_time := utils.GetTime().Now().AddDate(0, 0, -1).UTC().Format(time.RFC3339)
 		if notebook_metadata.Context.StartTime > 0 {
 			start_time = utils.ParseTimeFromInt64(
 				notebook_metadata.Context.StartTime).UTC().Format(time.RFC3339)
 		}
 
-		end_time := time.Now().UTC().Format(time.RFC3339)
+		end_time := utils.GetTime().Now().UTC().Format(time.RFC3339)
 		if notebook_metadata.Context.EndTime > 0 {
 			end_time = utils.ParseTimeFromInt64(
 				notebook_metadata.Context.EndTime).UTC().Format(time.RFC3339)
@@ -225,11 +364,16 @@ func getCustomCells(
 		}
 
 		request := &api_proto.NotebookCellRequest{
-			Type:  cell.Type,
-			Env:   env,
-			Input: cell.Template}
+			Type:   cell.Type,
+			Env:    env,
+			Output: cell.Output,
+			Sync:   true,
+			Input:  cell.Template}
 
 		switch strings.ToLower(cell.Type) {
+		case "none":
+			result = append(result, request)
+
 		case "vql", "md", "markdown":
 			result = append(result, request)
 
@@ -258,7 +402,7 @@ func getCellsForHunt(ctx context.Context,
 		return nil
 	}
 
-	hunt_obj, pres := dispatcher.GetHunt(hunt_id)
+	hunt_obj, pres := dispatcher.GetHunt(ctx, hunt_id)
 	if !pres {
 		return nil
 	}
@@ -292,7 +436,7 @@ LET ERRORS = SELECT ClientId,
        FlowId, Flow.start_time As StartedTime,
        Flow.state AS FlowState, Flow.status as FlowStatus,
        Flow.execution_duration as Duration,
-       Flow.total_collected_bytes as TotalBytes,
+       Flow.total_uploaded_bytes as TotalBytes,
        Flow.total_collected_rows as TotalRows
 FROM hunt_flows(hunt_id=HuntId)
 WHERE FlowState =~ 'ERROR'
@@ -317,7 +461,7 @@ SELECT ClientId,
        FlowId, Flow.start_time As StartedTime,
        Flow.state AS FlowState, Flow.status as FlowStatus,
        Flow.execution_duration as Duration,
-       Flow.total_collected_bytes as TotalBytes,
+       Flow.total_uploaded_bytes as TotalBytes,
        Flow.total_collected_rows as TotalRows
 FROM hunt_flows(hunt_id=HuntId)
 WHERE FlowState =~ 'RUNNING'
@@ -330,7 +474,7 @@ SELECT ClientId,
        FlowId, Flow.start_time As StartedTime,
        Flow.state AS FlowState, Flow.status as FlowStatus,
        Flow.execution_duration as Duration,
-       Flow.total_collected_bytes as TotalBytes,
+       Flow.total_uploaded_bytes as TotalBytes,
        Flow.total_collected_rows as TotalRows
 FROM hunt_flows(hunt_id=HuntId)
 WHERE FlowState =~ 'Finished'
@@ -357,9 +501,39 @@ func getCellsForFlow(ctx context.Context,
 	}
 	flow_context := flow_details.Context
 
-	sources := flow_context.ArtifactsWithResults
-	if len(sources) == 0 && flow_context.Request != nil {
-		sources = flow_context.Request.Artifacts
+	var sources []string
+
+	// If the collection is still running we can not rely on the
+	// ArtifactsWithResults because they may not all be here yet. In
+	// that case we need to create a cell for each possible source.
+	if flow_context.State != flows_proto.ArtifactCollectorContext_RUNNING {
+		sources = flow_context.ArtifactsWithResults
+
+	} else if flow_context.Request != nil {
+		manager, err := services.GetRepositoryManager(config_obj)
+		if err != nil {
+			return nil
+		}
+
+		repository, err := manager.GetGlobalRepository(config_obj)
+		if err != nil {
+			return nil
+		}
+
+		for _, artifact_name := range flow_context.Request.Artifacts {
+			artifact, pres := repository.Get(ctx, config_obj, artifact_name)
+			if !pres {
+				continue
+			}
+
+			for _, source := range artifact.Sources {
+				if source.Name == "" {
+					sources = append(sources, artifact.Name)
+					break
+				}
+				sources = append(sources, fmt.Sprintf("%v/%v", artifact.Name, source.Name))
+			}
+		}
 	}
 
 	notebook_metadata.Suggestions = append(notebook_metadata.Suggestions,
@@ -411,6 +585,32 @@ func getDefaultCellsForSources(
 		// Build a default empty notebook that shows off all the
 		// results if there are no custom cells.
 		if len(new_cells) == 0 {
+			var query string
+			orgs, pres := getKeyFromEnv(notebook_metadata.Env, "Orgs")
+			if pres && orgs != "" {
+				org_ids := []string{}
+
+				for _, o := range strings.Split(orgs, ",") {
+					org_ids = append(org_ids, "'''"+o+"'''")
+				}
+				query = fmt.Sprintf(`
+LET Orgs <= (%v)
+
+/*
+# %v
+*/
+SELECT * FROM source(artifact=%q /*, orgs=Orgs */)
+LIMIT 50`, strings.Join(org_ids, ", "), source, source)
+			} else {
+				query = fmt.Sprintf(`
+/*
+# %v
+*/
+SELECT * FROM source(artifact=%q)
+LIMIT 50
+`, source, source)
+			}
+
 			result = append(result, &api_proto.NotebookCellRequest{
 				Type: "VQL",
 
@@ -420,16 +620,19 @@ func getDefaultCellsForSources(
 				Env: []*api_proto.Env{{
 					Key: "ArtifactName", Value: source,
 				}},
-				Input: fmt.Sprintf(`
-/*
-# %v
-*/
-SELECT * FROM source(artifact=%q)
-LIMIT 50
-`, source, source),
+				Input: query,
 			})
 		}
 	}
 
 	return result
+}
+
+func getKeyFromEnv(env []*api_proto.Env, key string) (string, bool) {
+	for _, e := range env {
+		if e.Key == key {
+			return e.Value, true
+		}
+	}
+	return "", false
 }

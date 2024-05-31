@@ -1,8 +1,9 @@
+//go:build windows
 // +build windows
 
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+   Copyright (C) 2019-2024 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -192,10 +193,11 @@ func (self PslistPlugin) Call(
 
 	go func() {
 		defer close(output_chan)
+		defer vql_subsystem.RegisterMonitor("pslist", args)()
 
 		err := vql_subsystem.CheckAccess(scope, acls.MACHINE_STATE)
 		if err != nil {
-			scope.Log("pslist: %s", err)
+			scope.Log("pslist: %v", err)
 			return
 		}
 
@@ -206,7 +208,7 @@ func (self PslistPlugin) Call(
 
 		err = arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
 		if err != nil {
-			scope.Log("pslist: %s", err.Error())
+			scope.Log("pslist: %v", err)
 			return
 		}
 

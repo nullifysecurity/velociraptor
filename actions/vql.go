@@ -1,6 +1,6 @@
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+   Copyright (C) 2019-2024 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -149,6 +149,8 @@ func (self VQLClientAction) StartQuery(
 		Config: &config_proto.Config{
 			Remappings: config_obj.Remappings,
 		},
+		Ctx: ctx,
+
 		// Only provide the client config since we are running in
 		// client context.
 		ClientConfig: config_obj.Client,
@@ -383,11 +385,14 @@ func EncodeIntoResponsePackets(
 			result_chan <- result
 			part += 1
 		}
+
 		// Send the last payload outstanding.
 		defer ship_payload()
-		for {
-			deadline := time.After(time.Duration(max_wait) * time.Second)
 
+		// First deadline is max_wait in the future
+		deadline := time.After(time.Duration(max_wait) * time.Second)
+
+		for {
 			select {
 			case <-ctx.Done():
 				return
@@ -398,6 +403,7 @@ func EncodeIntoResponsePackets(
 				if total_rows > 0 {
 					ship_payload()
 				}
+
 				// Update the deadline to re-fire next.
 				deadline = time.After(time.Duration(max_wait) * time.Second)
 
@@ -429,8 +435,8 @@ func EncodeIntoResponsePackets(
 				if total_rows >= maxrows ||
 					buffer.Len() > max_row_buffer_size {
 					ship_payload()
-					deadline = time.After(time.Duration(max_wait) *
-						time.Second)
+					deadline = time.After(
+						time.Duration(max_wait) * time.Second)
 				}
 			}
 		}

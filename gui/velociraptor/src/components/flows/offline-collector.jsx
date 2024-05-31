@@ -1,24 +1,23 @@
-import React from 'react';
-import PropTypes from 'prop-types';
-import _ from 'lodash';
-import Modal from 'react-bootstrap/Modal';
-import StepWizard from 'react-step-wizard';
-import Form from 'react-bootstrap/Form';
-import Row from 'react-bootstrap/Row';
-import Col from 'react-bootstrap/Col';
-import ToolViewer from "../tools/tool-viewer.jsx";
 import { HotKeys, ObserveKeys } from "react-hotkeys";
-import ValidatedInteger from '../forms/validated_int.jsx';
-import T from '../i8n/i8n.jsx';
-import NewCollectionConfigParameters from './new-collections-parameters.jsx';
-
 import {
-    NewCollectionSelectArtifacts,
-    NewCollectionRequest,
     NewCollectionLaunch,
+    NewCollectionRequest,
+    NewCollectionSelectArtifacts,
     PaginationBuilder
 } from './new-collection.jsx';
 
+import Col from 'react-bootstrap/Col';
+import Form from 'react-bootstrap/Form';
+import Modal from 'react-bootstrap/Modal';
+import NewCollectionConfigParameters from './new-collections-parameters.jsx';
+import PropTypes from 'prop-types';
+import React from 'react';
+import Row from 'react-bootstrap/Row';
+import StepWizard from 'react-step-wizard';
+import T from '../i8n/i8n.jsx';
+import ToolViewer from "../tools/tool-viewer.jsx";
+import ValidatedInteger from '../forms/validated_int.jsx';
+import _ from 'lodash';
 
 // The offline collection wizard is built upon the new collection
 // wizard with some extra steps.
@@ -32,7 +31,9 @@ const tool_name_lookup = {
     Windows: "VelociraptorWindows",
     Windows_x86: "VelociraptorWindows_x86",
     Linux: "VelociraptorLinux",
-    MacOS: "VelociraptorDarwin",
+    MacOS: "VelociraptorCollector",
+    MacOSArm: "VelociraptorCollector",
+    Generic: "VelociraptorCollector",
 }
 
 
@@ -66,6 +67,8 @@ class OfflineCollectorParameters  extends React.Component {
                         <option value="Windows_x86">Windows_x86</option>
                         <option value="Linux">Linux</option>
                         <option value="MacOS">Mac OS</option>
+                        <option value="MacOSArm">Mac OS Arm</option>
+                        <option value="Generic">Generic Collector</option>
                       </Form.Control>
                     </Col>
                   </Form.Group>
@@ -95,7 +98,7 @@ class OfflineCollectorParameters  extends React.Component {
                      <Col sm="8">
                        <Form.Control
                          as="textarea"
-                         placeholder={T("Public Key/Certificate To Encrypt With. If X509, Defaults To Frontend Cert")}
+                         placeholder={T("Public Key/Certificate To Encrypt With. If empty, defaults To Frontend Cert")}
                          spellCheck="false"
                          value={this.props.parameters.encryption_args.public_key}
                          onChange={e => {
@@ -294,6 +297,22 @@ class OfflineCollectorParameters  extends React.Component {
                           />
                         </Col>
                       </Form.Group>
+
+                      <Form.Group as={Row}>
+                        <Form.Label column sm="3">{T("Credentials Token")}</Form.Label>
+                        <Col sm="8">
+                          <Form.Control
+                            as="textarea" rows={3}
+                            placeholder={T("Credentials Token")}
+                            spellCheck="false"
+                            value={this.props.parameters.target_args.credentialsToken}
+                            onChange={e => {
+                                this.props.parameters.target_args.credentialsToken = e.target.value;
+                                this.props.setParameters(this.props.parameters);
+                            }}
+                          />
+                        </Col>
+                      </Form.Group>
                       <Form.Group as={Row}>
                         <Form.Label column sm="3">{T("Region")}</Form.Label>
                         <Col sm="8">
@@ -325,6 +344,21 @@ class OfflineCollectorParameters  extends React.Component {
                         </Col>
                       </Form.Group>
                       <Form.Group as={Row}>
+                      <Form.Label column sm="3">File Name Prefix</Form.Label>
+                      <Col sm="8">
+                        <Form.Control as="textarea" rows={3}
+                                        placeholder={T("Prefix for files being uploaded. end in / for folders (blank if not used)")}
+                                        spellCheck="false"
+                                        value={this.props.parameters.target_args.s3UploadRoot}
+                                        onChange={(e) => {
+                                            this.props.parameters.target_args.s3UploadRoot = e.target.value;
+                                            this.props.setParameters(this.props.parameters);
+                                        }}
+                        >
+                        </Form.Control>
+                      </Col>
+                    </Form.Group>
+                    <Form.Group as={Row}>
                         <Form.Label column sm="3">{T("Server Side Encryption")}</Form.Label>
                         <Col sm="8">
                           <Form.Control
@@ -342,6 +376,21 @@ class OfflineCollectorParameters  extends React.Component {
                         </Col>
                       </Form.Group>
                       <Form.Group as={Row}>
+                      <Form.Label column sm="3">KMS Encryption Key</Form.Label>
+                      <Col sm="8">
+                        <Form.Control as="textarea" rows={3}
+                                        placeholder={T("KMS Encryption Key ARN (blank if KMS not used)")}
+                                        spellCheck="false"
+                                        value={this.props.parameters.target_args.kmsEncryptionKey}
+                                        onChange={(e) => {
+                                            this.props.parameters.target_args.kmsEncryptionKey = e.target.value;
+                                            this.props.setParameters(this.props.parameters);
+                                        }}
+                        >
+                        </Form.Control>
+                      </Col>
+                    </Form.Group>
+                    <Form.Group as={Row}>
                         <Form.Label column sm="3">{T("Skip Cert Verification")}</Form.Label>
                         <Col sm="8">
                           <Form.Control
@@ -513,15 +562,30 @@ class OfflineCollectorParameters  extends React.Component {
                     </Col>
                   </Form.Group>
                   <Form.Group as={Row}>
-                    <Form.Label column sm="3">{T("Output Prefix")}</Form.Label>
+                    <Form.Label column sm="3">{T("Output Directory")}</Form.Label>
                     <Col sm="8">
                       <Form.Control
                         as="input"
-                        placeholder={T("Output filename prefix")}
+                        placeholder={T("Output directory")}
                         spellCheck="false"
                         value={this.props.parameters.opt_output_directory}
                         onChange={e => {
                             this.props.parameters.opt_output_directory = e.target.value;
+                            this.props.setParameters(this.props.parameters);
+                        }}
+                      />
+                    </Col>
+                  </Form.Group>
+                  <Form.Group as={Row}>
+                    <Form.Label column sm="3">{T("Filename Format")}</Form.Label>
+                    <Col sm="8">
+                      <Form.Control
+                        as="input"
+                        placeholder={T("Filename format")}
+                        spellCheck="false"
+                        value={this.props.parameters.opt_filename_template}
+                        onChange={e => {
+                            this.props.parameters.opt_filename_template = e.target.value;
                             this.props.setParameters(this.props.parameters);
                         }}
                       />
@@ -680,9 +744,12 @@ export default class OfflineCollectorWizard extends React.Component {
                 // For S3 buckets.
                 credentialsKey: "",
                 credentialsSecret: "",
+                credentialsToken: "",
                 region: "",
                 endpoint: "",
                 serverSideEncryption: "",
+                kmsEncryptionKey: "",
+                s3UploadRoot: "",
 
                 // For Azure
                 sas_url: "",
@@ -696,6 +763,7 @@ export default class OfflineCollectorWizard extends React.Component {
             },
             opt_level: 5,
             opt_output_directory: "",
+            opt_filename_template: "Collection-%FQDN%-%TIMESTAMP%",
             opt_format: "jsonl",
             opt_prompt: "N",
         },
@@ -735,6 +803,7 @@ export default class OfflineCollectorWizard extends React.Component {
         env.push({key: "opt_tempdir", value: this.state.collector_parameters.opt_tempdir});
         env.push({key: "opt_level", value: this.state.collector_parameters.opt_level.toString()});
         env.push({key: "opt_output_directory", value: this.state.collector_parameters.opt_output_directory});
+        env.push({key: "opt_filename_template", value: this.state.collector_parameters.opt_filename_template});
         env.push({key: "opt_progress_timeout", value: JSON.stringify(
             this.state.resources.progress_timeout)});
         env.push({key: "opt_timeout", value: JSON.stringify(
@@ -821,6 +890,7 @@ export default class OfflineCollectorWizard extends React.Component {
                       setParameters={this.setParameters}
                       artifacts={this.state.artifacts}
                       setArtifacts={this.setArtifacts}
+                      configureResourceControl={false}
                       paginator={new OfflinePaginator(
                           "Configure Parameters",
                           "Create Offline Collector: Configure artifact parameters")}

@@ -1,12 +1,16 @@
 package notebook
 
 import (
+	"context"
+	"errors"
+	"os"
 	"time"
 
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
 	"www.velocidex.com/golang/velociraptor/datastore"
 	"www.velocidex.com/golang/velociraptor/file_store"
 	"www.velocidex.com/golang/velociraptor/file_store/api"
+	"www.velocidex.com/golang/velociraptor/file_store/path_specs"
 	"www.velocidex.com/golang/velociraptor/paths"
 	"www.velocidex.com/golang/velociraptor/reporting"
 )
@@ -32,7 +36,7 @@ func (self *NotebookStoreImpl) GetAvailableDownloadFiles(
 	notebook_id string) (*api_proto.AvailableDownloads, error) {
 
 	download_path := paths.NewNotebookPathManager(notebook_id).
-		HtmlExport().Dir()
+		HtmlExport("X").Dir()
 
 	return reporting.GetAvailableDownloadFiles(self.config_obj, download_path)
 }
@@ -43,24 +47,60 @@ func (self *NotebookStoreImpl) GetAvailableUploadFiles(notebook_id string) (
 
 	notebook_path_manager := paths.NewNotebookPathManager(notebook_id)
 	file_store_factory := file_store.GetFileStore(self.config_obj)
-	files, err := file_store_factory.ListDirectory(
-		notebook_path_manager.AttachmentDirectory())
+
+	notebook, err := self.GetNotebook(notebook_id)
 	if err != nil {
 		return nil, err
 	}
+	for _, cell_metadata := range notebook.CellMetadata {
+		cell_manager := notebook_path_manager.Cell(
+			cell_metadata.CellId, cell_metadata.CurrentVersion)
 
-	for _, item := range files {
-		ps := item.PathSpec()
+		err := api.Walk(file_store_factory, cell_manager.UploadsDir(),
+			func(ps api.FSPathSpec, info os.FileInfo) error {
+				stat, err := file_store_factory.StatFile(ps)
+				if err != nil {
+					return nil
+				}
 
-		result.Files = append(result.Files, &api_proto.AvailableDownloadFile{
-			Name:     item.Name(),
-			Type:     api.GetExtensionForFilestore(ps),
-			Path:     ps.AsClientPath(),
-			Size:     uint64(item.Size()),
-			Date:     item.ModTime().UTC().Format(time.RFC3339),
-			Complete: true,
-		})
+				result.Files = append(result.Files, &api_proto.AvailableDownloadFile{
+					Name: ps.Base(),
+					Size: uint64(stat.Size()),
+					Date: stat.ModTime().UTC().Format(time.RFC3339),
+					Type: api.GetExtensionForFilestore(ps),
+					Stats: &api_proto.ContainerStats{
+						Components: ps.Components(),
+					},
+				})
+				return nil
+			})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func (self *NotebookManager) RemoveNotebookAttachment(ctx context.Context,
+	notebook_id string, components []string) error {
+	return self.Store.RemoveAttachment(ctx, notebook_id, components)
+}
+
+func (self *NotebookStoreImpl) RemoveAttachment(ctx context.Context,
+	notebook_id string, components []string) error {
+
+	if len(components) == 0 {
+		return errors.New("Attachment components empty")
 	}
 
-	return result, nil
+	notebook_path_manager := paths.NewNotebookPathManager(notebook_id)
+	attachment_path := path_specs.NewUnsafeFilestorePath(components...)
+	if !path_specs.IsSubPath(
+		notebook_path_manager.AttachmentDirectory(),
+		attachment_path) {
+		return errors.New("Attachment must be within the notebook directory")
+	}
+
+	file_store_factory := file_store.GetFileStore(self.config_obj)
+	return file_store_factory.Delete(attachment_path)
 }

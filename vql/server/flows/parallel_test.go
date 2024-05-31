@@ -143,7 +143,7 @@ func (self *TestSuite) TestHuntsSource() {
 	hunt_dispatcher, err := services.GetHuntDispatcher(self.ConfigObj)
 	assert.NoError(self.T(), err)
 
-	hunt_id, err := hunt_dispatcher.CreateHunt(ctx,
+	new_hunt, err := hunt_dispatcher.CreateHunt(ctx,
 		self.ConfigObj, acl_managers.NullACLManager{},
 		&api_proto.Hunt{
 			StartRequest: &flows_proto.ArtifactCollectorArgs{
@@ -155,6 +155,7 @@ func (self *TestSuite) TestHuntsSource() {
 	launcher, err := services.GetLauncher(self.ConfigObj)
 	assert.NoError(self.T(), err)
 
+	hunt_id := new_hunt.HuntId
 	file_store_factory := file_store.GetFileStore(self.ConfigObj)
 	hunt_path_manager := paths.NewHuntPathManager(hunt_id).Clients()
 	hunt_rs_writer, err := result_sets.NewResultSetWriter(
@@ -170,6 +171,7 @@ func (self *TestSuite) TestHuntsSource() {
 			self.ConfigObj, acl_managers.NullACLManager{},
 			repository, &flows_proto.ArtifactCollectorArgs{
 				ClientId:  client_id,
+				Creator:   utils.GetSuperuserName(self.ConfigObj),
 				Artifacts: []string{"Test.Artifact"},
 			}, nil)
 		assert.NoError(self.T(), err)
@@ -199,7 +201,7 @@ func (self *TestSuite) TestHuntsSource() {
 	}
 
 	hunt_rs_writer.Close()
-	hunt_dispatcher.Refresh(self.ConfigObj)
+	hunt_dispatcher.Refresh(self.Ctx, self.ConfigObj)
 
 	builder := services.ScopeBuilder{
 		Config:     self.ConfigObj,

@@ -10,8 +10,8 @@ option go_package = "www.velocidex.com/golang/velociraptor/api/proto";
 
 message ReformatVQLMessage {
     string vql = 1;
+    string artifact = 2;
 }
-
 
 message Env {
     string key = 1;
@@ -21,12 +21,18 @@ message Env {
 message NotebookExportRequest {
     string notebook_id = 1;
     string type = 2;
+    string preferred_name = 3;
 }
 
+// Message sent to the notebook processor ro request a cell recalc.
 message NotebookCellRequest {
     string notebook_id = 1;
     string cell_id = 2;
+    string version = 12;
+    repeated string available_versions = 13;
+
     string input = 3;
+    string output = 14;
     string name = 11;
 
     uint64 offset = 4;
@@ -38,6 +44,9 @@ message NotebookCellRequest {
     repeated Env env = 9;
 
     bool include_uploads = 10;
+
+    // If this is set schedule the calculation syncronously.
+    bool sync = 15;
 }
 
 message NotebookContext {
@@ -60,6 +69,9 @@ message NotebookMetadata {
 
     // A list of usernames that have access to this notebook.
     repeated string collaborators = 12;
+
+    // A list of NOTEBOOK artifacts to create the notebook with.
+    repeated string artifacts = 20;
 
     // If this is set, the notebook is public.
     bool public = 13;
@@ -121,14 +133,23 @@ message NotebookCell {
     bool calculating = 9;
 
     repeated Env env = 11;
+
+    string error = 13;
+
+    string current_version = 14;
+    repeated string available_versions = 15;
 }
 
 message NotebookFileUploadRequest {
     string data = 1;
     string filename = 2;
+    repeated string components = 4;
     string notebook_id = 3;
+    string cell_id = 5;
 }
 
 message NotebookFileUploadResponse {
     string url = 1;
+    string filename = 2;
+    string mime_type = 3;
 }

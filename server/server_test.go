@@ -53,6 +53,9 @@ type: SERVER_EVENT
 name: Server.Internal.ClientPing
 type: SERVER
 `, `
+name: Server.Internal.ClientInfoSnapshot
+type: SERVER
+`, `
 name: System.Flow.Archive
 type: SERVER
 `, `
@@ -114,12 +117,13 @@ func (self *ServerTestSuite) SetupTest() {
 	require.NoError(self.T(), err)
 
 	self.client_id = self.client_crypto.ClientId()
-	db, err := datastore.GetDB(self.ConfigObj)
+
+	client_info_manager, err := services.GetClientInfoManager(self.ConfigObj)
 	assert.NoError(self.T(), err)
 
-	client_path_manager := paths.NewClientPathManager(self.client_id)
-	err = db.SetSubject(self.ConfigObj, client_path_manager.Path(),
-		&actions_proto.ClientInfo{ClientId: self.client_id})
+	err = client_info_manager.Set(self.Ctx, &services.ClientInfo{
+		actions_proto.ClientInfo{ClientId: self.client_id},
+	})
 	assert.NoError(self.T(), err)
 }
 
@@ -199,9 +203,12 @@ func (self *ServerTestSuite) TestClientEventTable() {
 	client_info_manager, err := services.GetClientInfoManager(self.ConfigObj)
 	assert.NoError(self.T(), err)
 
-	tasks, err := client_info_manager.PeekClientTasks(self.Ctx, self.client_id)
-	assert.NoError(t, err)
-	assert.Equal(t, len(tasks), 1)
+	var tasks []*crypto_proto.VeloMessage
+	vtesting.WaitUntil(time.Second, self.T(), func() bool {
+		tasks, err = client_info_manager.PeekClientTasks(self.Ctx, self.client_id)
+		assert.NoError(t, err)
+		return len(tasks) == 1
+	})
 
 	// This should send an UpdateEventTable message.
 	assert.Equal(t, tasks[0].SessionId, "F.Monitoring")
@@ -229,7 +236,7 @@ func (self *ServerTestSuite) TestForeman() {
 	hunt_dispatcher, err := services.GetHuntDispatcher(self.ConfigObj)
 	assert.NoError(self.T(), err)
 
-	hunt_id, err := hunt_dispatcher.CreateHunt(
+	new_hunt, err := hunt_dispatcher.CreateHunt(
 		self.Ctx, self.ConfigObj,
 		acl_managers.NullACLManager{},
 		&api_proto.Hunt{
@@ -240,12 +247,13 @@ func (self *ServerTestSuite) TestForeman() {
 
 	// Check for hunt object in the data store.
 	hunt := &api_proto.Hunt{}
-	hunt_path_manager := paths.NewHuntPathManager(hunt_id)
+	hunt_path_manager := paths.NewHuntPathManager(new_hunt.HuntId)
 	err = db.GetSubject(self.ConfigObj, hunt_path_manager.Path(), hunt)
 	require.NoError(t, err)
 
 	assert.NotNil(t, hunt.StartRequest.CompiledCollectorArgs)
 
+	hunt.StartRequest.FlowId = ""
 	hunt.StartRequest.CompiledCollectorArgs = nil
 	expected.CompiledCollectorArgs = nil
 
@@ -260,9 +268,12 @@ func (self *ServerTestSuite) TestForeman() {
 	client_info_manager, err := services.GetClientInfoManager(self.ConfigObj)
 	assert.NoError(t, err)
 
-	tasks, err := client_info_manager.PeekClientTasks(self.Ctx, self.client_id)
-	assert.NoError(t, err)
-	assert.Equal(t, len(tasks), 1)
+	var tasks []*crypto_proto.VeloMessage
+	vtesting.WaitUntil(time.Second, self.T(), func() bool {
+		tasks, err = client_info_manager.PeekClientTasks(self.Ctx, self.client_id)
+		assert.NoError(t, err)
+		return len(tasks) == 1
+	})
 
 	// Task should be UpdateEventTable message.
 	assert.Equal(t, tasks[0].SessionId, "F.Monitoring")
@@ -321,16 +332,8 @@ func (self *ServerTestSuite) TestMonitoring() {
 // Receiving a response from the server to the monitoring flow will
 // write the rows into a jsonl file in the client's monitoring area.
 func (self *ServerTestSuite) TestMonitoringAlerts() {
-	mock_clock := &utils.MockClock{
-		MockNow: time.Unix(1602103388, 0),
-	}
-
-	closer := utils.MockTime(mock_clock)
+	closer := utils.MockTime(utils.NewMockClock(time.Unix(1602103388, 0)))
 	defer closer()
-
-	journal, err := services.GetJournal(self.ConfigObj)
-	assert.NoError(self.T(), err)
-	journal.SetClock(mock_clock)
 
 	runner := flows.NewFlowRunner(self.Ctx, self.ConfigObj)
 	runner.ProcessSingleMessage(self.Ctx,
@@ -426,6 +429,7 @@ func (self *ServerTestSuite) TestScheduleCollection() {
 	t := self.T()
 	request := &flows_proto.ArtifactCollectorArgs{
 		ClientId:  self.client_id,
+		Creator:   utils.GetSuperuserName(self.ConfigObj),
 		Artifacts: []string{"Generic.Client.Info"},
 	}
 
@@ -451,9 +455,12 @@ func (self *ServerTestSuite) TestScheduleCollection() {
 	client_info_manager, err := services.GetClientInfoManager(self.ConfigObj)
 	assert.NoError(self.T(), err)
 
-	tasks, err := client_info_manager.PeekClientTasks(self.Ctx, self.client_id)
-	assert.NoError(t, err)
-	assert.Equal(t, len(tasks), 1)
+	var tasks []*crypto_proto.VeloMessage
+	vtesting.WaitUntil(time.Second, self.T(), func() bool {
+		tasks, err = client_info_manager.PeekClientTasks(self.Ctx, self.client_id)
+		assert.NoError(t, err)
+		return len(tasks) == 1
+	})
 
 	// The request sends a single FlowRequest task with two queries
 	assert.Equal(t, len(tasks[0].FlowRequest.VQLClientActions), 2)
@@ -484,6 +491,7 @@ func (self *ServerTestSuite) createArtifactCollection() (string, error) {
 		repository,
 		&flows_proto.ArtifactCollectorArgs{
 			ClientId:  self.client_id,
+			Creator:   utils.GetSuperuserName(self.ConfigObj),
 			Artifacts: []string{"Generic.Client.Info"},
 		}, nil)
 
@@ -686,12 +694,14 @@ func (self *ServerTestSuite) TestCancellation() {
 	client_info_manager, err := services.GetClientInfoManager(self.ConfigObj)
 	assert.NoError(self.T(), err)
 
-	tasks, err := client_info_manager.PeekClientTasks(self.Ctx, self.client_id)
-	assert.NoError(t, err)
+	vtesting.WaitUntil(time.Second, self.T(), func() bool {
+		tasks, err := client_info_manager.PeekClientTasks(self.Ctx, self.client_id)
+		assert.NoError(t, err)
 
-	// Generic.Client.Info has two source preconditions in parallel
-	assert.Equal(t, len(tasks), 1)
-	assert.Equal(t, len(tasks[0].FlowRequest.VQLClientActions), 2)
+		// Generic.Client.Info has two source preconditions in parallel
+		return len(tasks) == 1 &&
+			len(tasks[0].FlowRequest.VQLClientActions) == 2
+	})
 
 	// Cancelling the flow will notify the client immediately.
 	launcher, err := services.GetLauncher(self.ConfigObj)
@@ -704,9 +714,12 @@ func (self *ServerTestSuite) TestCancellation() {
 
 	// Cancelling a flow simply schedules a cancel message for the
 	// client and removes all pending tasks.
-	tasks, err = client_info_manager.PeekClientTasks(self.Ctx, self.client_id)
-	assert.NoError(t, err)
-	assert.Equal(t, len(tasks), 1)
+	var tasks []*crypto_proto.VeloMessage
+	vtesting.WaitUntil(time.Second, self.T(), func() bool {
+		tasks, err = client_info_manager.PeekClientTasks(self.Ctx, self.client_id)
+		assert.NoError(t, err)
+		return len(tasks) == 1
+	})
 
 	// Client will cancel all in flight queries from this session
 	// id.

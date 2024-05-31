@@ -1,6 +1,6 @@
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+   Copyright (C) 2019-2024 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -39,7 +39,7 @@ var (
 
 // Loads the api description from the embedded asset
 func LoadApiDescription() ([]*api_proto.Completion, error) {
-	assets.Init()
+	assets.InitOnce()
 
 	data, err := assets.ReadFile("docs/references/vql.yaml")
 	if err != nil {

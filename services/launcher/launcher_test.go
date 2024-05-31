@@ -12,14 +12,15 @@ import (
 	"time"
 
 	"github.com/Velocidex/ordereddict"
+	"github.com/go-errors/errors"
 	"github.com/sebdah/goldie"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
+	"www.velocidex.com/golang/velociraptor/acls"
 	acl_proto "www.velocidex.com/golang/velociraptor/acls/proto"
 	"www.velocidex.com/golang/velociraptor/actions"
 	actions_proto "www.velocidex.com/golang/velociraptor/actions/proto"
 	artifacts_proto "www.velocidex.com/golang/velociraptor/artifacts/proto"
-	crypto_proto "www.velocidex.com/golang/velociraptor/crypto/proto"
 	"www.velocidex.com/golang/velociraptor/file_store/test_utils"
 	flows_proto "www.velocidex.com/golang/velociraptor/flows/proto"
 	"www.velocidex.com/golang/velociraptor/json"
@@ -577,7 +578,13 @@ sources:
 
 	acl_manager := acl_managers.NewServerACLManager(self.ConfigObj, "UserX")
 
-	// Permission denied - the principal is not allowed to compile this artifact.
+	// Lets give the user some permissions.
+	err := services.SetPolicy(self.ConfigObj, "UserX",
+		&acl_proto.ApiClientACL{CollectClient: true})
+	assert.NoError(self.T(), err)
+
+	// Permission denied - the principal is not allowed to compile
+	// this artifact.
 	launcher, err := services.GetLauncher(self.ConfigObj)
 	assert.NoError(self.T(), err)
 
@@ -589,13 +596,77 @@ sources:
 
 	// Lets give the user some permissions.
 	err = services.SetPolicy(self.ConfigObj, "UserX",
-		&acl_proto.ApiClientACL{Execve: true})
+		&acl_proto.ApiClientACL{Execve: true, CollectClient: true})
 	assert.NoError(self.T(), err)
 
 	// Should be fine now.
 	acl_manager = acl_managers.NewServerACLManager(self.ConfigObj, "UserX")
 	compiled, err = launcher.CompileCollectorArgs(
 		ctx, self.ConfigObj, acl_manager, repository,
+		services.CompilerOptions{}, request)
+	assert.NoError(self.T(), err)
+	assert.Equal(self.T(), len(compiled[0].Query), 2)
+}
+
+func (self *LauncherTestSuite) TestBasicPermissions() {
+	repository := self.LoadArtifacts(`
+name: Test.Artifact.BasicPermissions
+sources:
+- query:  |
+    SELECT * FROM info()
+`)
+
+	// The artifact compiler converts artifacts into a VQL request
+	// to be run by the clients.
+	request := &flows_proto.ArtifactCollectorArgs{
+		Creator:      "UserX",
+		ClientId:     "C.1234",
+		Artifacts:    []string{"Test.Artifact.BasicPermissions"},
+		OpsPerSecond: 42,
+		Timeout:      73,
+	}
+
+	// acl_manager caches tokens so we need a new one each time.
+	acl_manager := acl_managers.NewServerACLManager(
+		self.ConfigObj, "UserX")
+
+	launcher, err := services.GetLauncher(self.ConfigObj)
+	assert.NoError(self.T(), err)
+
+	compiled, err := launcher.CompileCollectorArgs(
+		self.Ctx, self.ConfigObj, acl_manager, repository,
+		services.CompilerOptions{}, request)
+	assert.Error(self.T(), err)
+	assert.True(self.T(), errors.Is(err, acls.PermissionDenied))
+
+	// Lets give the user COLLECT_BASIC
+	err = services.SetPolicy(self.ConfigObj, "UserX",
+		&acl_proto.ApiClientACL{CollectBasic: true})
+	assert.NoError(self.T(), err)
+
+	// Try again - this is not enough though because the artifact is
+	// not marked as "basic"
+	compiled, err = launcher.CompileCollectorArgs(
+		self.Ctx, self.ConfigObj, acl_manager, repository,
+		services.CompilerOptions{}, request)
+	assert.Error(self.T(), err)
+	assert.True(self.T(), errors.Is(err, acls.PermissionDenied))
+
+	// Mark the artifact as "Basic"
+	manager, err := services.GetRepositoryManager(self.ConfigObj)
+	assert.NoError(self.T(), err)
+
+	err = manager.SetArtifactMetadata(self.Ctx, self.ConfigObj,
+		"UserX", "Test.Artifact.BasicPermissions",
+		&artifacts_proto.ArtifactMetadata{
+			Basic: true,
+		})
+	assert.NoError(self.T(), err)
+
+	// Should be fine now.
+	acl_manager = acl_managers.NewServerACLManager(self.ConfigObj, "UserX")
+	compiled, err = launcher.CompileCollectorArgs(
+		self.Ctx, self.ConfigObj, acl_manager, repository,
 		services.CompilerOptions{}, request)
 	assert.NoError(self.T(), err)
 	assert.Equal(self.T(), len(compiled[0].Query), 2)
@@ -652,14 +723,13 @@ func (self *LauncherTestSuite) TestParameterTypes() {
 			self.ConfigObj, ctx, test_responder, vql_request)
 	}
 
-	var messages []*crypto_proto.VeloMessage
+	var messages []*ordereddict.Dict
 	vtesting.WaitUntil(time.Second, self.T(), func() bool {
-		messages = test_responder.Drain.Messages()
+		messages = getResponses(test_responder.Drain.Messages())
 		return len(messages) > 0
 	})
 
-	goldie.Assert(self.T(), "TestParameterTypes",
-		json.MustMarshalIndent(getResponses(messages)))
+	goldie.Assert(self.T(), "TestParameterTypes", json.MustMarshalIndent(messages))
 }
 
 var (
@@ -857,8 +927,10 @@ func (self *LauncherTestSuite) TestParameterTypesDepsQuery() {
 	goldie.Assert(self.T(), "TestParameterTypesDepsQuery", json.MustMarshalIndent(results))
 }
 
-/* When the precondition is at the top level, there will be a single
-   request with multiple sources in the same request: Serial Mode
+/*
+When the precondition is at the top level, there will be a single
+
+	request with multiple sources in the same request: Serial Mode
 */
 func (self *LauncherTestSuite) TestPreconditionTopLevel() {
 	repository := self.LoadArtifacts(`
@@ -908,8 +980,10 @@ sources:
 		json.MustMarshalIndent(fixture))
 }
 
-/* When preconditions are at the source level, artifact is collected
-   in parallel mode.
+/*
+When preconditions are at the source level, artifact is collected
+
+	in parallel mode.
 */
 func (self *LauncherTestSuite) TestPreconditionSourceLevel() {
 	repository := self.LoadArtifacts(`
@@ -1142,6 +1216,96 @@ sources:
 
 	// Specifying MaxRows in the request overrides the setting.
 	assert.Equal(self.T(), request.MaxRows, uint64(100))
+}
+
+func (self *LauncherTestSuite) TestMaxWait() {
+	artifact_definitions := []string{`
+name: Test.Artifact.MaxWait
+resources:
+  max_batch_wait: 22
+  max_batch_rows: 555
+
+type: CLIENT_EVENT
+
+sources:
+- query: |
+    SELECT * FROM scope()
+`, `
+name: Test.Artifact.Default
+type: CLIENT_EVENT
+sources:
+- query: |
+    SELECT * FROM scope()
+`}
+
+	manager, _ := services.GetRepositoryManager(self.ConfigObj)
+	repository := manager.NewRepository()
+
+	for _, definition := range artifact_definitions {
+		_, err := repository.LoadYaml(definition,
+			services.ArtifactOptions{
+				ValidateArtifact:  true,
+				ArtifactIsBuiltIn: true})
+
+		assert.NoError(self.T(), err)
+	}
+
+	request := &flows_proto.ArtifactCollectorArgs{
+		Artifacts: []string{
+			"Test.Artifact.MaxWait",
+			"Test.Artifact.Default",
+		},
+		Specs: []*flows_proto.ArtifactSpec{
+			{
+				Artifact: "Test.Artifact.MaxWait",
+			},
+			{
+				Artifact: "Test.Artifact.Default",
+			},
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Compile the artifact request into VQL
+	acl_manager := acl_managers.NullACLManager{}
+	launcher, err := services.GetLauncher(self.ConfigObj)
+	assert.NoError(self.T(), err)
+
+	// No timeout specified in the request causes the timeout to
+	// be set according to the artifact defaults.
+	compiled, err := launcher.CompileCollectorArgs(
+		ctx, self.ConfigObj, acl_manager, repository,
+		services.CompilerOptions{}, request)
+	assert.NoError(self.T(), err)
+
+	// This artifact default is specified as MaxBatchRows = 555
+	assert.Equal(self.T(), getReqName(compiled[0]), "Test.Artifact.MaxWait")
+	assert.Equal(self.T(), compiled[0].MaxRow, uint64(555))
+	assert.Equal(self.T(), compiled[0].MaxWait, uint64(22))
+
+	// This artifact is not specified so MaxBatchRows is the default
+	// 1000
+	assert.Equal(self.T(), getReqName(compiled[1]), "Test.Artifact.Default")
+	assert.Equal(self.T(), compiled[1].MaxRow, uint64(1000))
+
+	// Specifying MaxBatchRows in the spec will override the default
+	request.Specs[0].MaxBatchRows = 12
+	request.Specs[0].MaxBatchWait = 66
+
+	compiled, err = launcher.CompileCollectorArgs(
+		ctx, self.ConfigObj, acl_manager, repository,
+		services.CompilerOptions{}, request)
+	assert.NoError(self.T(), err)
+
+	// The spec defines the Test.Artifact.MaxWait should have MaxRow = 12
+	assert.Equal(self.T(), getReqName(compiled[0]), "Test.Artifact.MaxWait")
+	assert.Equal(self.T(), compiled[0].MaxRow, uint64(12))
+	assert.Equal(self.T(), compiled[0].MaxWait, uint64(66))
+
+	// Does not affect the Test.Artifact.Default request.
+	assert.Equal(self.T(), getReqName(compiled[1]), "Test.Artifact.Default")
+	assert.Equal(self.T(), compiled[1].MaxRow, uint64(1000))
 }
 
 func getReqName(in *actions_proto.VQLCollectorArgs) string {

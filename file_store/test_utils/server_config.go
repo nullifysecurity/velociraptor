@@ -33,7 +33,7 @@ Client:
     -----END CERTIFICATE-----
   nonce: rKNKAYam310=
   writeback_darwin: /etc/velociraptor.writeback.yaml
-  writeback_linux: /tmp/1/velociraptor.writeback.yaml
+  writeback_linux: /tmp/velociraptor.writeback.yaml
   writeback_windows: $ProgramFiles\Velociraptor\velociraptor.writeback.yaml
   max_poll: 600
   windows_installer:
@@ -48,7 +48,6 @@ Client:
     version: 0.6.4-rc4
     commit: f3264824
     build_time: "2022-04-14T02:23:05+10:00"
-  pinned_server_name: VelociraptorServer
   max_upload_size: 5242880
   local_buffer:
     memory_size: 52428800
@@ -56,6 +55,7 @@ Client:
     filename_linux: /var/tmp/Velociraptor_Buffer.bin
     filename_windows: $TEMP/Velociraptor_Buffer.bin
     filename_darwin: /var/tmp/Velociraptor_Buffer.bin
+  disable_checkpoints: true
 API:
   bind_address: 127.0.0.1
   bind_port: 8001
@@ -113,9 +113,6 @@ GUI:
     W5gJrneEd85yOMZRQ+zR9lUBnfK+csnfdPys6Tf+lnTBlXGtXaN69rmAHD1WJp5l
     JL5WubPDAGJoNCt7TqNBOwMk6avXZPFQkVljQclVoysIBQ44Tac=
     -----END RSA PRIVATE KEY-----
-  internal_cidr:
-  - 127.0.0.1/12
-  - 192.168.0.0/16
   authenticator:
     type: Basic
 CA:
@@ -212,6 +209,7 @@ Frontend:
     expected_clients: 10000
     default_log_batch_time: 100
     default_monitoring_log_batch_time: 100
+    disable_file_buffering: true
 
 Datastore:
   implementation: Test
@@ -255,6 +253,7 @@ obfuscation_nonce: RzlAlmdcUyw=
 defaults:
   hunt_expiry_hours: 168
   notebook_cell_timeout_min: 10
+  backup_period_seconds: -1
 
 services:
   hunt_manager: false

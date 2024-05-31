@@ -82,6 +82,14 @@ func True(t TestingT, expected bool, msgAndArgs ...interface{}) {
 	assert.True(t, expected, msgAndArgs...)
 }
 
+func NotEmpty(t TestingT, x interface{}) {
+	assert.NotEmpty(t, x)
+}
+
 func NotNil(t TestingT, expected interface{}, msgAndArgs ...interface{}) {
 	assert.NotNil(t, expected, msgAndArgs...)
+}
+
+func Nil(t TestingT, expected interface{}, msgAndArgs ...interface{}) {
+	assert.Nil(t, expected, msgAndArgs...)
 }

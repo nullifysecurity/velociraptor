@@ -67,6 +67,7 @@ type OSFileInfo struct {
 	_FileInfo     os.FileInfo
 	_full_path    *accessors.OSPath
 	_accessor_ctx *AccessorContext
+	_fstype       string
 }
 
 func NewOSFileInfo(base os.FileInfo, path *accessors.OSPath) *OSFileInfo {
@@ -116,20 +117,24 @@ func (self *OSFileInfo) Dev() uint64 {
 }
 
 func (self *OSFileInfo) Data() *ordereddict.Dict {
+	result := ordereddict.NewDict()
 	if self.IsLink() {
 		path := self.FullPath()
 		target, err := os.Readlink(path)
 		if err == nil {
-			return ordereddict.NewDict().
-				Set("Link", target)
+			result.Set("Link", target)
 		}
 	}
 
-	result := ordereddict.NewDict()
 	sys, ok := self._FileInfo.Sys().(*syscall.Stat_t)
 	if ok {
-		result.Set("DevMajor", (sys.Dev>>8)&0xff).
-			Set("DevMinor", sys.Dev&0xFF)
+		major, minor := splitDevNumber(uint64(sys.Dev))
+		result.Set("DevMajor", major).
+			Set("DevMinor", minor)
+	}
+
+	if self._fstype != "" {
+		result.Set("FSType", self._fstype)
 	}
 
 	return result
@@ -293,6 +298,11 @@ func (self OSFileSystemAccessor) ReadDir(dir string) ([]accessors.FileInfo, erro
 	return self.ReadDirWithOSPath(full_path)
 }
 
+func (self *OSFileSystemAccessor) GetUnderlyingAPIFilename(
+	full_path *accessors.OSPath) (string, error) {
+	return full_path.PathSpec().Path, nil
+}
+
 func (self OSFileSystemAccessor) ReadDirWithOSPath(
 	full_path *accessors.OSPath) ([]accessors.FileInfo, error) {
 	dir := full_path.PathSpec().Path
@@ -326,17 +336,36 @@ func (self OSFileSystemAccessor) ReadDirWithOSPath(
 	} else {
 		// If it is a symlink, we need to check the target of the
 		// symlink and make sure it is a directory.
-		target, err := os.Readlink(dir)
+		target, err := filepath.EvalSymlinks(dir)
 		if err == nil {
+			// The target is interpreted relative to the directory of
+			// the link.
+			if !strings.HasPrefix(target, "/") {
+				target = full_path.Dirname().PathSpec().Path + "/" + target
+			}
 			lstat, err := os.Lstat(target)
+
 			// Target of the link is not there or inaccessible or
 			// points to something that is not a directory - just
 			// ignore it with no errors.
 			if err != nil || !lstat.IsDir() {
 				return nil, nil
 			}
+
+			sys, ok := lstat.Sys().(*syscall.Stat_t)
+			if ok {
+				// Keep track of the links we visited.
+				if self.context.WasLinkVisited(
+					uint64(sys.Dev), sys.Ino) {
+					return nil, errors.New("Symlink cycle detected")
+				}
+				self.context.LinkVisited(uint64(sys.Dev), sys.Ino)
+			}
 		}
+		dir = target
 	}
+
+	dirfstype := getFSType(dir)
 
 	files, err := utils.ReadDir(dir)
 	if err != nil {
@@ -345,11 +374,19 @@ func (self OSFileSystemAccessor) ReadDirWithOSPath(
 
 	var result []accessors.FileInfo
 	for _, f := range files {
+		fp := full_path.Append(f.Name())
+		var fstype string
+		if f.IsDir() {
+			fstype = getFSType(fp.String())
+		} else {
+			fstype = dirfstype
+		}
 		result = append(result,
 			&OSFileInfo{
 				_FileInfo:     f,
-				_full_path:    full_path.Append(f.Name()),
+				_full_path:    fp,
 				_accessor_ctx: self.context,
+				_fstype:       fstype,
 			})
 	}
 

@@ -1,31 +1,32 @@
-/* A general purpose cached reader pool
+/*
+A general purpose cached reader pool
 
-   Can be used by any plugins that wish to return references to an
-   open accessor/file set. We maintain an LRU of paged readers so when
-   another plugin wants to read the same file, we can immediately
-   serve it with a cached paged reader.
+Can be used by any plugins that wish to return references to an open
+accessor/file set. We maintain an LRU of paged readers so when
+another plugin wants to read the same file, we can immediately
+serve it with a cached paged reader.
 
-   Note that if the reader is evicted from the LRU, this is not an
-   error - the reader will simply be recreated on demand by re-opening
-   the file. This controls the number of concurrent open files so it
-   is not too large, but still maintains a good temporally correlated
-   cache.
+Note that if the reader is evicted from the LRU, this is not an
+error - the reader will simply be recreated on demand by re-opening
+the file. This controls the number of concurrent open files so it
+is not too large, but still maintains a good temporally correlated
+cache.
 
-   Depending on the query it is difficult to know when to close the
-   files based solely on scope. Consider a parser which returns a lazy
-   object:
+Depending on the query it is difficult to know when to close the
+files based solely on scope. Consider a parser which returns a lazy
+object:
 
-   SELECT parse_binary(...) FROM glob(globs=..)
+SELECT parse_binary(...) FROM glob(globs=..)
 
-   The parse_binary() function will return an object wrapping the file
-   - i.e. it will have a reference to the reader. Depending on the
-   query, the reader might be accessed at any time. It is difficult to
-   know when is it safe to remove the file reference - at the end of
-   the row? at the end the root scope?
+The parse_binary() function will return an object wrapping the file
+- i.e. it will have a reference to the reader. Depending on the
+query, the reader might be accessed at any time. It is difficult to
+know when is it safe to remove the file reference - at the end of
+the row? at the end the root scope?
 
-   Having an LRU allows us to be flexible and not worry about the
-   scope lifetime so much. Files will eventually get closed and cached
-   will be evicted.
+Having an LRU allows us to be flexible and not worry about the
+scope lifetime so much. Files will eventually get closed and caches
+will be evicted.
 */
 package readers
 
@@ -35,9 +36,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Velocidex/ttlcache/v2"
 	ntfs "www.velocidex.com/golang/go-ntfs/parser"
 	"www.velocidex.com/golang/velociraptor/accessors"
-	"www.velocidex.com/golang/velociraptor/third_party/cache"
 	"www.velocidex.com/golang/velociraptor/utils"
 	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/vfilter"
@@ -60,7 +61,7 @@ import (
 const READERS_CACHE = "$accessor_reader"
 
 type ReaderPool struct {
-	lru *cache.LRUCache
+	lru *ttlcache.Cache
 }
 
 // Moves the reader to the head of the LRU.
@@ -70,9 +71,10 @@ func (self *ReaderPool) Activate(reader *AccessorReader) {
 
 // Flush all contained readers.
 func (self *ReaderPool) Close() {
-	for _, k := range self.lru.Keys() {
-		self.lru.Delete(k)
+	for _, k := range self.lru.GetKeys() {
+		self.lru.Remove(k)
 	}
+	self.lru.Close()
 }
 
 type AccessorReader struct {
@@ -87,9 +89,6 @@ type AccessorReader struct {
 
 	reader       accessors.ReadSeekCloser
 	paged_reader *ntfs.PagedReader
-
-	created     time.Time
-	last_active time.Time
 
 	// Owner pool
 	pool *ReaderPool
@@ -167,6 +166,8 @@ func (self *AccessorReader) ReadAt(buf []byte, offset int64) (int, error) {
 	// It is ok to close the reader at any time. We expect this
 	// and just re-open the underlying file when needed.
 	if self.reader == nil {
+		lifetime := self.Lifetime
+
 		accessor, err := accessors.GetAccessor(self.Accessor, self.Scope)
 		if err != nil {
 			self.mu.Unlock()
@@ -190,7 +191,6 @@ func (self *AccessorReader) ReadAt(buf []byte, offset int64) (int, error) {
 			self.mu.Unlock()
 			return 0, err
 		}
-		self.created = time.Now()
 
 		// Set an alarm to close the file in the future - this
 		// ensures we dont hold open handles for long running
@@ -213,12 +213,11 @@ func (self *AccessorReader) ReadAt(buf []byte, offset int64) (int, error) {
 
 				// Close the file after its lifetime
 				// is exhausted.
-			case <-time.After(self.GetLifetime()):
+			case <-time.After(lifetime):
 				self.Close()
 			}
 		}()
 
-		self.last_active = time.Now()
 		result, err := paged_reader.ReadAt(buf, offset)
 		self.paged_reader = paged_reader
 		self.reader = reader
@@ -233,7 +232,6 @@ func (self *AccessorReader) ReadAt(buf []byte, offset int64) (int, error) {
 		return result, err
 	}
 
-	self.last_active = time.Now()
 	paged_reader := self.paged_reader
 
 	// Reading from the paged reader may trigger another reader due to
@@ -253,8 +251,25 @@ func GetReaderPool(scope vfilter.Scope, lru_size int64) *ReaderPool {
 
 		// Create a reader pool
 		pool := &ReaderPool{
-			lru: cache.NewLRUCache(lru_size),
+			lru: ttlcache.NewCache(),
 		}
+		pool.lru.SetCacheSizeLimit(int(lru_size))
+
+		// Close the item on expiration
+		pool.lru.SetExpirationReasonCallback(
+			func(key string,
+				reason ttlcache.EvictionReason, value interface{}) error {
+				accessor, ok := value.(*AccessorReader)
+				if ok {
+					// We may not block this callback so close the
+					// accessor in the background.
+					go accessor.Close()
+				}
+				return nil
+			})
+
+		// When the item expires from the cache we need to close it.
+
 		vql_subsystem.CacheSet(scope, READERS_CACHE, pool)
 
 		// Destroy the pool when the scope is done.
@@ -282,8 +297,8 @@ func NewPagedReader(scope vfilter.Scope,
 
 	// Try to get the reader from the pool
 	key := accessor + "://" + filename.String()
-	value, pres := pool.lru.Get(key)
-	if pres {
+	value, err := pool.lru.Get(key)
+	if err == nil {
 		return value.(*AccessorReader), nil
 	}
 
@@ -300,14 +315,12 @@ func NewPagedReader(scope vfilter.Scope,
 	}
 
 	result := &AccessorReader{
-		Accessor:    accessor,
-		File:        filename,
-		key:         key,
-		max_size:    max_size,
-		Scope:       scope,
-		pool:        pool,
-		created:     time.Now(),
-		last_active: time.Now(),
+		Accessor: accessor,
+		File:     filename,
+		key:      key,
+		max_size: max_size,
+		Scope:    scope,
+		pool:     pool,
 
 		// By default close all files after a minute.
 		Lifetime: time.Minute,

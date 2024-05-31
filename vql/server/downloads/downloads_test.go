@@ -4,6 +4,8 @@ import (
 	"context"
 	"io/ioutil"
 	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,55 +26,103 @@ import (
 	"www.velocidex.com/golang/velociraptor/services/hunt_dispatcher"
 	"www.velocidex.com/golang/velociraptor/third_party/zip"
 	"www.velocidex.com/golang/velociraptor/utils"
+	vql_subsystem "www.velocidex.com/golang/velociraptor/vql"
 	"www.velocidex.com/golang/velociraptor/vql/acl_managers"
 	"www.velocidex.com/golang/velociraptor/vql/server/clients"
 	"www.velocidex.com/golang/velociraptor/vql/server/hunts"
 	"www.velocidex.com/golang/velociraptor/vql/tools/collector"
+	"www.velocidex.com/golang/velociraptor/vtesting"
 	"www.velocidex.com/golang/velociraptor/vtesting/assert"
 	"www.velocidex.com/golang/vfilter"
 
+	_ "www.velocidex.com/golang/velociraptor/accessors/data"
+	_ "www.velocidex.com/golang/velociraptor/accessors/file"
+	_ "www.velocidex.com/golang/velociraptor/accessors/ntfs"
 	_ "www.velocidex.com/golang/velociraptor/vql/protocols"
 )
 
 type TestSuite struct {
 	test_utils.TestSuite
 	client_id string
+
+	acl_manager vql_subsystem.ACLManager
 }
 
 func (self *TestSuite) SetupTest() {
 	self.ConfigObj = self.LoadConfig()
 	self.ConfigObj.Services.HuntDispatcher = true
 	self.ConfigObj.Services.HuntManager = true
+	self.ConfigObj.Services.ServerArtifacts = true
+	self.ConfigObj.Services.VfsService = true
 
 	self.LoadArtifactsIntoConfig([]string{`
 name: Custom.TestArtifactUpload
 type: CLIENT
 sources:
 - query: SELECT * FROM info()
+`, `
+name: Server.Audit.Logs
+type: INTERNAL
+`, `
+name: TestArtifact
+type: SERVER
+sources:
+- query: |
+    SELECT "Hello" AS Col, pathspec(parse="/bin/ls", path_type="linux") AS OSPath,
+      upload(accessor="data", file="Some Data", name="test.txt") AS Upload1,
+      upload(accessor="data", file="Some Other Data", name="test2.txt") AS Upload2
+    FROM scope()
 `})
 
 	self.TestSuite.SetupTest()
 
-	Clock = &utils.MockClock{MockNow: time.Unix(1602103388, 0)}
+	Clock = utils.NewMockClock(time.Unix(1602103388, 0))
 	reporting.Clock = Clock
+
 	launcher, err := services.GetLauncher(self.ConfigObj)
 	assert.NoError(self.T(), err)
 	launcher.SetFlowIdForTests("F.1234")
+
+	// Create an administrator user
+	err = services.GrantRoles(self.ConfigObj, "admin", []string{"administrator"})
+	assert.NoError(self.T(), err)
+
+	self.acl_manager = acl_managers.NewServerACLManager(
+		self.ConfigObj, "admin")
 }
 
 func (self *TestSuite) TestExportCollectionServerArtifact() {
-	import_file_path, err := filepath.Abs("fixtures/export_server_artifact.zip")
+	closer := utils.MockTime(utils.NewMockClock(time.Unix(10, 10)))
+	defer closer()
+
+	manager, _ := services.GetRepositoryManager(self.ConfigObj)
+	repository, err := manager.GetGlobalRepository(self.ConfigObj)
 	assert.NoError(self.T(), err)
 
-	test_utils.UnzipToFilestore(self.ConfigObj,
-		path_specs.NewUnsafeFilestorePath("clients", "server", "collections"),
-		import_file_path)
+	launcher, err := services.GetLauncher(self.ConfigObj)
+	assert.NoError(self.T(), err)
 
-	// test_utils.GetMemoryFileStore(self.T(), self.ConfigObj).Debug()
-	manager, _ := services.GetRepositoryManager(self.ConfigObj)
+	flow_id, err := launcher.ScheduleArtifactCollection(self.Ctx, self.ConfigObj,
+		self.acl_manager,
+		repository, &flows_proto.ArtifactCollectorArgs{
+			Artifacts: []string{"TestArtifact"},
+			Creator:   utils.GetSuperuserName(self.ConfigObj),
+			ClientId:  "server",
+		}, utils.SyncCompleter)
+	assert.NoError(self.T(), err)
+
+	// Wait here until the collection is completed.
+	vtesting.WaitUntil(time.Second*5, self.T(), func() bool {
+		flow, err := launcher.GetFlowDetails(self.Ctx, self.ConfigObj, "server", flow_id)
+		assert.NoError(self.T(), err)
+
+		return flow.Context.State == flows_proto.ArtifactCollectorContext_FINISHED
+	})
+
+	// Now create a download of this collection.
 	builder := services.ScopeBuilder{
 		Config:     self.ConfigObj,
-		ACLManager: acl_managers.NullACLManager{},
+		ACLManager: self.acl_manager,
 		Logger:     logging.NewPlainLogger(self.ConfigObj, &logging.FrontendComponent),
 		Env:        ordereddict.NewDict(),
 	}
@@ -85,8 +135,9 @@ func (self *TestSuite) TestExportCollectionServerArtifact() {
 	result := (&CreateFlowDownload{}).Call(ctx, scope,
 		ordereddict.NewDict().
 			Set("client_id", "server").
-			Set("flow_id", "F.CGLR6OS84DP00").
+			Set("flow_id", flow_id).
 			Set("wait", true).
+			Set("format", "csv").
 			Set("expand_sparse", false).
 			Set("name", "Test"))
 
@@ -97,6 +148,7 @@ func (self *TestSuite) TestExportCollectionServerArtifact() {
 	file_details, err := openZipFile(self.ConfigObj, scope, path_spec)
 	assert.NoError(self.T(), err)
 
+	// Make sure the collection is
 	goldie.Assert(self.T(), "TestExportCollectionServerArtifact",
 		json.MustMarshalIndent(file_details))
 }
@@ -104,12 +156,12 @@ func (self *TestSuite) TestExportCollectionServerArtifact() {
 // First import a collection from a zip file to create a
 // collection. Then we export the collection back into zip files to
 // test the export functionality.
-func (self *TestSuite) TestExportCollection() {
+func (self *TestSuite) TestExportCollection1() {
 	manager, _ := services.GetRepositoryManager(self.ConfigObj)
 
 	builder := services.ScopeBuilder{
 		Config:     self.ConfigObj,
-		ACLManager: acl_managers.NullACLManager{},
+		ACLManager: self.acl_manager,
 		Logger:     logging.NewPlainLogger(self.ConfigObj, &logging.FrontendComponent),
 		Env:        ordereddict.NewDict(),
 	}
@@ -202,6 +254,9 @@ func (self *TestSuite) TestExportCollection() {
 }
 
 func (self *TestSuite) TestExportHunt() {
+	closer := utils.MockTime(utils.NewMockClock(time.Unix(10, 10)))
+	defer closer()
+
 	// Operate on a different client
 	self.client_id = "C.1235"
 
@@ -209,7 +264,7 @@ func (self *TestSuite) TestExportHunt() {
 
 	builder := services.ScopeBuilder{
 		Config:     self.ConfigObj,
-		ACLManager: acl_managers.NullACLManager{},
+		ACLManager: self.acl_manager,
 		Logger:     logging.NewPlainLogger(self.ConfigObj, &logging.FrontendComponent),
 		Env:        ordereddict.NewDict(),
 	}
@@ -261,7 +316,7 @@ func (self *TestSuite) TestExportHunt() {
 
 	assert.Equal(self.T(), self.client_id, result.(string))
 
-	time.Sleep(time.Second)
+	time.Sleep(500 * time.Millisecond)
 
 	// Now create a hunt download export.
 	result = (&CreateHuntDownload{}).Call(ctx, scope,
@@ -319,6 +374,11 @@ func openZipFile(
 		return nil, err
 	}
 
+	// Sort files for comparison stability.
+	sort.Slice(r.File, func(i, j int) bool {
+		return r.File[i].Name < r.File[j].Name
+	})
+
 	for _, f := range r.File {
 		rc, err := f.Open()
 		if err != nil {
@@ -329,13 +389,27 @@ func openZipFile(
 			return nil, err
 		}
 
-		rows, err := utils.ParseJsonToDicts(serialized)
-		if err != nil {
-			result.Set(f.Name, string(serialized))
+		if strings.HasSuffix(f.Name, "csv") {
+			result.Set(f.Name, strings.Split(string(serialized), "\n"))
 			continue
 		}
 
-		result.Set(f.Name, rows)
+		// Either JSON array or JSONL
+		rows, err := utils.ParseJsonToDicts(serialized)
+		if err == nil {
+			result.Set(f.Name, rows)
+			continue
+		}
+
+		if serialized[0] == '{' {
+			item, err := utils.ParseJsonToObject(serialized)
+			if err == nil {
+				result.Set(f.Name, item)
+			}
+			continue
+		}
+
+		result.Set(f.Name, string(serialized))
 	}
 
 	return result, nil

@@ -8,7 +8,6 @@ import Card from 'react-bootstrap/Card';
 import Dropdown from 'react-bootstrap/Dropdown';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { requestToParameters } from "./utils.jsx";
-import Spinner from '../utils/spinner.jsx';
 import Button from 'react-bootstrap/Button';
 import ButtonGroup from 'react-bootstrap/ButtonGroup';
 import Tooltip from 'react-bootstrap/Tooltip';
@@ -76,7 +75,7 @@ export default class FlowOverview extends React.Component {
         let flow_id = this.props.flow.session_id;
         let client_id = this.props.flow.client_id;
 
-        if (_.isUndefined(flow_id) || _.isUndefined(client_id)) {
+        if (_.isUndefined(flow_id) || _.isUndefined(client_id) || flow_id === 'new') {
             return;
         }
 
@@ -102,10 +101,6 @@ export default class FlowOverview extends React.Component {
         let artifacts = flow && flow.request && flow.request.artifacts;
 
         if (!flow || !flow.session_id || !artifacts)  {
-            if (this.state.loading) {
-                return <Spinner loading={true}/>;
-            }
-
             return <h5 className="no-content">{T("Please click a collection in the above table")}</h5>;
         }
 

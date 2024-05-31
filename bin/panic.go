@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
+	kingpin "github.com/alecthomas/kingpin/v2"
 	"github.com/mitchellh/panicwrap"
-	kingpin "gopkg.in/alecthomas/kingpin.v2"
 	"www.velocidex.com/golang/velociraptor/config"
 )
 
@@ -16,7 +16,7 @@ func writeLogOnPanic() error {
 	// Figure out the log directory.
 	config_obj, err := new(config.Loader).
 		WithFileLoader(*config_path).
-		WithEmbedded().
+		WithEmbedded(*embedded_config_path).
 		WithEnvLoader("VELOCIRAPTOR_CONFIG").
 		LoadAndValidate()
 	if err != nil {

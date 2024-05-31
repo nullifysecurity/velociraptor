@@ -1,25 +1,26 @@
 /*
-   Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+Velociraptor - Dig Deeper
+Copyright (C) 2019-2024 Rapid7 Inc.
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published
-   by the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package filesystem
 
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -40,6 +41,7 @@ type CopyFunctionArgs struct {
 	Destination string            `vfilter:"required,field=dest,doc=The destination file to write."`
 	Permissions string            `vfilter:"optional,field=permissions,doc=Required permissions (e.g. 'x')."`
 	Append      bool              `vfilter:"optional,field=append,doc=If true we append to the target file otherwise truncate it"`
+	Directories bool              `vfilter:"optional,field=create_directories,doc=If true we ensure the destination directories exist"`
 }
 
 type CopyFunction struct{}
@@ -47,6 +49,7 @@ type CopyFunction struct{}
 func (self *CopyFunction) Call(ctx context.Context,
 	scope vfilter.Scope,
 	args *ordereddict.Dict) vfilter.Any {
+	defer vql_subsystem.RegisterMonitor("copy", args)()
 
 	select {
 	case <-ctx.Done():
@@ -122,6 +125,15 @@ func (self *CopyFunction) Call(ctx context.Context,
 	flags := os.O_RDWR | os.O_CREATE | os.O_TRUNC
 	if arg.Append {
 		flags = os.O_WRONLY | os.O_APPEND
+	}
+
+	if arg.Directories {
+		err = os.MkdirAll(filepath.Dir(arg.Destination), 0700)
+		if err != nil {
+			scope.Log("copy: Failed to create directories for %v: %v",
+				arg.Destination, err)
+			return vfilter.Null{}
+		}
 	}
 
 	to, err := os.OpenFile(arg.Destination, flags, permissions)

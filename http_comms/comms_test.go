@@ -1,19 +1,19 @@
 /*
-   Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+Velociraptor - Dig Deeper
+Copyright (C) 2019-2024 Rapid7 Inc.
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published
-   by the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package http_comms
 
@@ -37,6 +37,8 @@ import (
 	crypto_proto "www.velocidex.com/golang/velociraptor/crypto/proto"
 	crypto_test "www.velocidex.com/golang/velociraptor/crypto/testing"
 	"www.velocidex.com/golang/velociraptor/executor"
+	"www.velocidex.com/golang/velociraptor/json"
+	"www.velocidex.com/golang/velociraptor/services/writeback"
 	"www.velocidex.com/golang/velociraptor/utils"
 	"www.velocidex.com/golang/velociraptor/vtesting"
 )
@@ -46,7 +48,7 @@ var (
 )
 
 type FakeClock struct {
-	utils.MockClock
+	*utils.MockClock
 
 	events *[]string
 }
@@ -137,6 +139,8 @@ type CommsTestSuite struct {
 	config_obj           *config_proto.Config
 
 	empty_response []byte
+
+	writeback_path string
 }
 
 func (self *CommsTestSuite) SetupTest() {
@@ -164,11 +168,22 @@ func (self *CommsTestSuite) SetupTest() {
 	mu.Lock()
 	Rand = func(int) int { return 0 }
 	mu.Unlock()
+
+	// Initialize the writeback
+	self.writeback_path = getTempFile(self.T())
+	self.config_obj.Client.WritebackLinux = self.writeback_path
+	self.config_obj.Client.WritebackWindows = self.writeback_path
+	self.config_obj.Client.WritebackDarwin = self.writeback_path
+
+	writeback_service := writeback.GetWritebackService()
+	writeback_service.LoadWriteback(self.config_obj)
 }
 
 func (self *CommsTestSuite) TearDownTest() {
 	self.frontend1.Close()
 	self.frontend2.Close()
+
+	os.Remove(self.writeback_path)
 }
 
 // Check that unexpected closing of the executor calls the abort
@@ -228,9 +243,13 @@ func (self *CommsTestSuite) TestAbort() {
 
 func (self *CommsTestSuite) TestEnrollment() {
 	urls := []string{self.frontend1.URL}
+	mock_clock := utils.NewMockClock(time.Unix(100, 0))
+	cancel := utils.MockTime(mock_clock)
+	defer cancel()
 
-	clock := &FakeClock{events: &self.frontend1.events}
-	clock.MockNow = time.Now()
+	clock := &FakeClock{
+		MockClock: mock_clock,
+		events:    &self.frontend1.events}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -251,6 +270,8 @@ func (self *CommsTestSuite) TestEnrollment() {
 		context.Background(), nil, !URGENT,
 		crypto_proto.PackedMessageList_ZCOMPRESSION)
 
+	json.Dump(self.frontend1.events)
+
 	checkResponses(self.T(), self.frontend1.events, []string{
 		// First request looks for server.pem but fails on frontend1
 		"0 request: /server.pem",
@@ -265,9 +286,13 @@ func (self *CommsTestSuite) TestEnrollment() {
 
 func (self *CommsTestSuite) TestServerError() {
 	urls := []string{self.frontend1.URL}
+	mock_clock := utils.NewMockClock(time.Unix(100, 0))
+	cancel := utils.MockTime(mock_clock)
+	defer cancel()
 
-	clock := &FakeClock{events: &self.frontend1.events}
-	clock.MockNow = time.Now()
+	clock := &FakeClock{
+		MockClock: mock_clock,
+		events:    &self.frontend1.events}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -313,9 +338,13 @@ func (self *CommsTestSuite) TestServerError() {
 // 500, Frontend2 is down too.
 func (self *CommsTestSuite) TestMultiFrontends() {
 	urls := []string{self.frontend1.URL, self.frontend2.URL}
+	mock_clock := utils.NewMockClock(time.Unix(100, 0))
+	cancel := utils.MockTime(mock_clock)
+	defer cancel()
 
-	clock := &FakeClock{events: &self.frontend1.events}
-	clock.MockNow = time.Now()
+	clock := &FakeClock{
+		MockClock: mock_clock,
+		events:    &self.frontend1.events}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -374,9 +403,13 @@ func (self *CommsTestSuite) TestMultiFrontends() {
 // Client configured with two frontends. Both keep failing.
 func (self *CommsTestSuite) TestMultiFrontendsAllIsBorked() {
 	urls := []string{self.frontend1.URL, self.frontend2.URL}
+	mock_clock := utils.NewMockClock(time.Unix(100, 0))
+	cancel := utils.MockTime(mock_clock)
+	defer cancel()
 
-	clock := &FakeClock{events: &self.frontend1.events}
-	clock.MockNow = time.Now()
+	clock := &FakeClock{
+		MockClock: mock_clock,
+		events:    &self.frontend1.events}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -448,9 +481,13 @@ func (self *CommsTestSuite) TestMultiFrontendsAllIsBorked() {
 // switching to FE2
 func (self *CommsTestSuite) TestMultiFrontendsIntermittantFailure() {
 	urls := []string{self.frontend1.URL, self.frontend2.URL}
+	mock_clock := utils.NewMockClock(time.Unix(100, 0))
+	cancel := utils.MockTime(mock_clock)
+	defer cancel()
 
-	clock := &FakeClock{events: &self.frontend1.events}
-	clock.MockNow = time.Now()
+	clock := &FakeClock{
+		MockClock: mock_clock,
+		events:    &self.frontend1.events}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -508,9 +545,13 @@ func (self *CommsTestSuite) TestMultiFrontendsIntermittantFailure() {
 // fails we switch back to FE1.
 func (self *CommsTestSuite) TestMultiFrontendsHeavyFailure() {
 	urls := []string{self.frontend1.URL, self.frontend2.URL}
+	mock_clock := utils.NewMockClock(time.Unix(100, 0))
+	cancel := utils.MockTime(mock_clock)
+	defer cancel()
 
-	clock := &FakeClock{events: &self.frontend1.events}
-	clock.MockNow = time.Now()
+	clock := &FakeClock{
+		MockClock: mock_clock,
+		events:    &self.frontend1.events}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -582,9 +623,13 @@ func (self *CommsTestSuite) TestMultiFrontendsHeavyFailure() {
 func (self *CommsTestSuite) TestMultiFrontendRedirect() {
 	// FE2 is not known to the client in advance.
 	urls := []string{self.frontend1.URL}
+	mock_clock := utils.NewMockClock(time.Unix(100, 0))
+	cancel := utils.MockTime(mock_clock)
+	defer cancel()
 
-	clock := &FakeClock{events: &self.frontend1.events}
-	clock.MockNow = time.Now()
+	clock := &FakeClock{
+		MockClock: mock_clock,
+		events:    &self.frontend1.events}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -648,10 +693,15 @@ func (self *CommsTestSuite) TestMultiFrontendRedirect() {
 
 // Check that redirects do not cause un-neccesary sleeps.
 func (self *CommsTestSuite) TestMultiFrontendRedirectWithErrors() {
+	mock_clock := utils.NewMockClock(time.Unix(100, 0))
+	cancel := utils.MockTime(mock_clock)
+	defer cancel()
+
 	urls := []string{self.frontend1.URL}
 
-	clock := &FakeClock{events: &self.frontend1.events}
-	clock.MockNow = time.Now()
+	clock := &FakeClock{
+		MockClock: mock_clock,
+		events:    &self.frontend1.events}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -743,9 +793,13 @@ func (self *CommsTestSuite) TestMultiFrontendRedirectWithErrors() {
 // Frontends redirecting to each other.
 func (self *CommsTestSuite) TestMultiRedirects() {
 	urls := []string{self.frontend1.URL}
+	mock_clock := utils.NewMockClock(time.Unix(100, 0))
+	cancel := utils.MockTime(mock_clock)
+	defer cancel()
 
-	clock := &FakeClock{events: &self.frontend1.events}
-	clock.MockNow = time.Now()
+	clock := &FakeClock{
+		MockClock: mock_clock,
+		events:    &self.frontend1.events}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

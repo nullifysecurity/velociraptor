@@ -62,9 +62,19 @@ func (self ClientInfo) OS() ClientOS {
 }
 
 type ClientInfoManager interface {
-	// Used to set a new client record.
+	ListClients(ctx context.Context) <-chan string
+
+	// Used to set a new client record. To modify an existing record -
+	// or set a new one use Modify()
 	Set(ctx context.Context,
 		client_info *ClientInfo) error
+
+	// Modify a record or set a new one - if the record is not found,
+	// modifier will receive a nil client_info. The ClientInfoManager
+	// can not be accessed within the modifier function as it is
+	// locked for the duration of the change.
+	Modify(ctx context.Context, client_id string,
+		modifier func(client_info *ClientInfo) (new_record *ClientInfo, err error)) error
 
 	Get(ctx context.Context,
 		client_id string) (*ClientInfo, error)
@@ -100,10 +110,6 @@ type ClientInfoManager interface {
 		ctx context.Context,
 		client_id string,
 		req *crypto_proto.VeloMessage) error
-
-	// Remove client id from the cache - this is needed when the
-	// record chages and we need to force a read from storage.
-	Flush(ctx context.Context, client_id string)
 
 	// Be able to manipulate the client and server metadata.
 	GetMetadata(ctx context.Context,

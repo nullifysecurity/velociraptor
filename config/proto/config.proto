@@ -70,6 +70,10 @@ message Writeback {
             description: "The last certificate serial number we saw from the server. Clients refuse to connect to servers with older serial numbers as part of server key rotation protocol."
         }];
 
+    // Record the last seen server pem we saw. This is used in writing
+    // encrypted logs before being able to connect to the server.
+    string last_server_pem = 18;
+
     VQLEventTable event_queries = 1;
 
     repeated FlowCheckPoint checkpoints = 17;
@@ -149,6 +153,10 @@ message ClientConfig {
     // A proxy setting to use.
     string proxy = 32;
 
+    // For more complex proxy configurations use this setting
+    // (overrides the `proxy` configuration above).
+    ProxyConfig proxy_config = 46;
+
     string ca_certificate = 11 [(sem_type) = {
             description: "The CA's certificate encoded in PEM. The client will trust any server signed with this CA."
         }];
@@ -168,6 +176,12 @@ message ClientConfig {
     string writeback_windows = 10 [(sem_type) = {
             description: "A path where windows clients will write local state."
         }];
+
+    // If this is set we use a second file for the level2
+    // writeback. The string expected here is added to the regular
+    // writeback filename. For example setting to "l2" will create a
+    // file named "velociraptor.writeback.yaml.l2"
+    string level2_writeback_suffix = 44;
 
     // A path to set the temp directory. If not set we use the system
     // default. The path may be relative to the current directory
@@ -192,6 +206,11 @@ message ClientConfig {
             description: "The standard deviation between polls."
             default: "30",
         }];
+
+    // When using websockets the server pings the client periodically
+    // to see if it is still there. This setting controls how often
+    // this ping occurs (default 10).
+    uint64 ws_ping_wait_sec = 45;
 
     // If this is set, the nanny will exit if we are not able to send
     // messages to the server within this many seconds. NOTE - even a
@@ -249,6 +268,7 @@ message ClientConfig {
 
     CryptoConfig Crypto = 33;
 
+    // Deprecated - do not set.
     bool disable_compression = 37;
 
     // How often clients inform the server about flow progress
@@ -256,7 +276,7 @@ message ClientConfig {
     uint64 default_server_flow_stats_update = 39;
 
     // Clients will send a Server.Internal.ClientInfo message to the
-    // server every this many seconds.This helps to keep the server
+    // server every this many seconds. This helps to keep the server
     // info up to date about each client. This should not be sent too
     // frequently. The default is 1 day (86400 seconds).
     int64 client_info_update_time = 40;
@@ -288,6 +308,14 @@ message ClientConfig {
     // collect in addition to the list sent by the server. This is
     // most useful to initialize the client.
     repeated string additional_event_artifacts = 43;
+
+    // Path relative to the relevant tmpdir above where client side
+    // logs are kept. These logs are encrypted client side and need to
+    // be decrypted on the server to read.
+    string logfile_name = 47;
+    uint64 logfile_size = 48;
+
+    string panic_file = 49;
 }
 
 message APIConfig {
@@ -338,6 +366,25 @@ message ApiClientConfig {
         }];
 
     string pinned_server_name = 6;
+}
+
+// Fine grained configuration of proxies for http connections.
+message ProxyConfig {
+    string https = 1;
+    string http = 2;
+
+    // A list of url regexp to match the url and connect to the
+    // target. Use and empty string to denote direct connection.  For
+    // example: {"^https://localhost/": "",
+    //           "^https://www.example.com/": "http://localhost:3182"}
+    map<string,string> proxy_url_regexp = 3;
+
+    // Location of a PAC file (overrides the above settings).
+    string pac = 4;
+
+    // If this is set we ignore the HTTP_PROXY and HTTPS_PROXY
+    // environment variables.
+    bool ignore_environment = 5;
 }
 
 message GUILink {
@@ -428,6 +475,19 @@ message GUIConfig {
             description: "Port to bind to."
         }];
 
+    // A list of CIDR addresses from permitted networks. If this is
+    // not set, permit all connections to the GUI from anywhere.
+    repeated string allowed_cidr = 23;
+
+    // Header defined by the proxy containing the remote address. This
+    // header will be used in the allowed_cidr matching if specified.
+    // NOTE: Only use this if you do have a reverse proxy in front of
+    // the server. Otherwise an attacker can simply send this header
+    // to pretent to come from any IP address. If this setting is
+    // specified we take the src address from the header, otherwise
+    // from the remote IP address.
+    string forwarded_proxy_header = 24;
+
     // Allows the GUI to start with no encryption - **WARNING** This
     // only makes sense if you have TLS proxy in front. In fact the
     // GUI **will not work** without a TLS proxy because the csrf
@@ -447,13 +507,6 @@ message GUIConfig {
             description: "The private key of the frontend server encoded in PEM format."
         }];
 
-    repeated string internal_cidr = 3 [(sem_type) = {
-            description: "CIDR addresses of internal networks (e.g. 192.168.0.0/16). We use this to show the internal/external icon."
-        }];
-
-    repeated string vpn_cidr = 4 [(sem_type) = {
-            description: "CIDR addresses of vpn networks (e.g. 192.168.0.0/16). We use this to show the internal/external icon."
-        }];
 
     string public_url = 7 [(sem_type) = {
             description: "The public URL of this server.",
@@ -489,6 +542,7 @@ message GUIConfig {
     string saml_idp_metadata_url = 14;
     string saml_root_url = 15;
     string saml_user_attribute = 16;
+
     // DEPRECATED: Will be moved to a Google authenticator
     string google_oauth_client_id = 5;
     string google_oauth_client_secret = 6;
@@ -516,9 +570,22 @@ message ReverseProxyConfig {
 message DynDNSConfig {
     string hostname = 1 [deprecated=true];
 
-    // Not used any more - we take the hostname from Frontend.Hostname.
+    // Type of DynDNS server. Currently supported:
+    // * empty string or dyndns
+    // * cloudflare
+    string type = 8;
+
     string ddns_username = 2;
     string ddns_password = 3;
+
+    // Some providers require a different hostname be updated that the
+    // actual hostname (e.g. no-ip.com uses all.ddnskey.com to hide
+    // the domain)
+    string ddns_hostname = 11;
+
+    // This can be a full golang template for example
+    // http://ip1.dynupdate.no-ip.com/nic/update?hostname={{.Hostname}}&myip={{.IP}}
+    // or just the base URL
     string update_url = 4;
     uint64 frequency = 5;
 
@@ -527,6 +594,10 @@ message DynDNSConfig {
 
     // DNS server we query for our own hostname/ip mapping (default 8.8.8.8:53)
     string dns_server = 7;
+
+    // cloudflare settings - required
+    string api_token = 9;
+    string zone_name = 10;
 }
 
 message FrontendResourceControl {
@@ -623,6 +694,10 @@ message FrontendResourceControl {
     // log messages before forwarding them to the server (default 600
     // second).
     uint64 default_monitoring_log_batch_time = 32;
+
+    // Disables file buffering for event queues. This may result in
+    // poor performance under load.
+    bool disable_file_buffering = 33;
 }
 
 
@@ -648,11 +723,22 @@ message FrontendConfig {
     // it. You better know what you are doing here!
     bool use_plain_http = 24;
 
+    // Enabling this requires the clients to present a valid
+    // certificate (signed by one of the Root CAs listed in
+    // Client.Crypto.root_certs or the Velociraptor built in CA
+    // itself).
+    bool require_client_certificates = 36;
+
     // A proxy setting to use - Velociraptor needs to connect to
     // download tools. This setting will force it to go out over this
-    // proxy. NOTE- If you dont want to allow outbound connections,
-    // just set this to an non existant setting.
+    // proxy. NOTE- If you dont want your server to allow outbound
+    // connections, just set this to an non existant setting.
     string proxy = 33;
+
+    // For more complex proxy configurations use this setting
+    // (overrides the `proxy` configuration above).
+    ProxyConfig proxy_config = 37;
+
 
     // These are used to secure the client/server communications -
     // Even when using external TLS certificates! This certificate
@@ -787,6 +873,17 @@ message DatastoreConfig {
     string location = 2;
     string filestore_directory = 3;
 
+    // Used by the default FileBaseDataStore
+
+    // Set to the min required disk space. When we fall below this
+    // available disk space, we refuse to write files. This avoids the
+    // possibility of writing corrupted files. Default is 50mb. Set to
+    // -1 to disable disk space checking.
+    int64 min_allowed_file_space_mb = 15;
+
+    // How often to check the disk space (default 10 sec)
+    int64 disk_check_frequency_sec = 16;
+
     // Cap directories to this size after reporting error - this
     // should not happen normally but may happen if the deployment has
     // been very active or due to a bug!
@@ -804,6 +901,9 @@ message DatastoreConfig {
     // Number of writing threads - increase for high latency
     // filesystems (default 100).
     int64 memcache_write_mutation_writers = 6;
+
+    // Aim to not exceed this memory limit.
+    int64 memcache_write_max_memory = 17;  // Default 100Mb
 
     // How long to delay writes so they can be combined. This applies
     // for writing result sets - we keep the writes in memory for
@@ -824,6 +924,18 @@ message DatastoreConfig {
     // Experimental - do not set in configs yet!
     string minion_implementation = 7;
     string master_implementation = 8;
+}
+
+// This configuration applies for minions. On minions this will
+// override the settings elsewhere in the config file allowing an easy
+// way to manage the difference between minions and master nodes.
+
+// This override occurs at config load times so you can see the final configuration using
+// velociraptor --minion --config server.config.yaml config show
+message MinionConfig {
+    // Used to override Defaults.notebook_number_of_local_workers
+    int64 notebook_number_of_local_workers = 1;
+    int64 notebook_worker_priority = 2;
 }
 
 // Configuration for the mail server.
@@ -939,6 +1051,8 @@ message ServerServicesConfig {
    bool label = 22;
    bool launcher = 23;
    bool notebook_service = 24;
+   bool scheduler_service = 29;
+   bool backup_service = 30;
 
     // Client services
    bool http_communicator = 27;
@@ -947,7 +1061,37 @@ message ServerServicesConfig {
 
 message Defaults {
     int64 hunt_expiry_hours = 1;
+
+    // How often to refresh the hunt index (default 600 sec)
+    int64 hunt_dispatcher_refresh_sec = 43;
+
+
     int64 notebook_cell_timeout_min = 2;
+
+    // When calculating a new cell we do not start calculation until
+    // the process memory is smaller than the low memory mark.
+    uint64 notebook_memory_low_water_mark = 36;
+
+    // When the process memory exceeds the high water marrk, we
+    // actively cancel in flight notebook cell calculations.
+    uint64 notebook_memory_high_water_mark = 37;
+
+    // Wait this long for a worker to become available before giving
+    // up.
+    int64 notebook_wait_time_for_worker_ms = 46;
+
+    // Set to -1 to disable local workers. The default is 5 local
+    // workers. If you want the master to **not** perform any notebook
+    // computations reduce this to -1 and set
+    // Minion.notebook_number_of_local_workers to 5.
+    int64 notebook_number_of_local_workers = 38;
+
+    // The default priority of notebook processors (Higher priority
+    // will receive jobs over lower priority).
+    int64 notebook_worker_priority = 39;
+
+    // Total number of cell versions we keep for undo/redo support.
+    int64 notebook_versions = 42;
 
     // The default CSV delimiter
     string csv_delimiter = 3;
@@ -960,8 +1104,11 @@ message Defaults {
     // is off by default.
     bool event_change_notify_all_clients = 6;
 
+    // Deprecated - not used
     uint64 max_vfs_directory_size = 7;
 
+    // These artifact definitions will also be loaded at start and
+    // will be considered built in.
     repeated string artifact_definitions_directories = 8;
 
     // The number of rows to keep in memory during a group by
@@ -1001,6 +1148,7 @@ message Defaults {
     // POST messages. If not set we use client defaults.
     uint64 max_rows = 30;
     uint64 max_row_buffer_size = 31;
+    uint64 max_batch_wait = 35;
 
     // When the server is in lockdown mode the following permissions
     // will be denied (Even for administrators).
@@ -1014,8 +1162,31 @@ message Defaults {
     // - MACHINE_STATE
     repeated string lockdown_denied_permissions = 32;
 
-    // Default expiry of certificant issuances (default 365 days)
+    // Default expiry of certificate issuances (default 365 days)
     int64 certificate_validity_days = 33;
+
+    // Normally the inventory service attempts to download tools in
+    // its own but if this is set, we prevent any external access.
+    bool disable_inventory_service_external_access = 34;
+
+    // Controls how exports work (creating hunt or colletion exports
+    // to a zip file).
+    int64 export_concurrency = 40;
+    int64 export_max_timeout_sec = 41;
+
+    // Watch plugin frequency sleep time in seconds: How often
+    // watch_syslog() will check for changes (default 3).
+    int64 watch_plugin_frequency = 44;
+
+    // Maximum length of the line that will be parsed (16kb)
+    int64 watch_plugin_buffer_size = 45;
+
+    // Period in seconds when to produce a backup
+    int64 backup_period_seconds = 47;
+
+    // How often to run the client info's house keeping thread in
+    // seconds (default 60 sec)
+    int64 client_info_housekeeping_period = 48;
 }
 
 // Configures crypto preferences
@@ -1056,6 +1227,18 @@ message CryptoConfig {
     string certificate_verification_mode = 3 [(sem_type) = {
             description: "Selects the way in which Velociraptor verifies TLS certificates. Allowed values: PKI (the default), PKI_OR_THUMBPRINT, THUMBPRINT_ONLY"
         }];
+
+    // If this is set we do not enforce minimum configuration for TLS
+    // servers. This is required when connecting to Velociraptor with
+    // some legacy clients (like Powershell) who do not support TLS13
+    bool allow_weak_tls_server = 4;
+
+    // If you want to use mTLS to mutually authenticate clients to the
+    // server, place a list of pem encoded client certificates
+    // here. They will be presented to the server if the server
+    // requires mTLS authentication.
+    string client_certificate = 5;
+    string client_certificate_private_key = 6;
 }
 
 message MountPoint {
@@ -1071,6 +1254,10 @@ message RemappingConfig {
     // Human readable description of what this mapping rule should
     // produce.
     string description = 10;
+
+    // A Sequence of VQL LET statements to preconfigure the scope for
+    // the accessor in the From clause.
+    string scope = 11;
 
     // For mount options
     MountPoint from = 2;
@@ -1129,6 +1316,10 @@ message Config {
 
     LoggingConfig Logging = 23;
 
+    // Minion specific overrides
+    MinionConfig Minion = 40;
+
+
     bool verbose = 20 [(sem_type) = {
             description: "Enable verbose logging output.",
         }];
@@ -1176,7 +1367,7 @@ message Config {
     // does not know or use its own org id.
     string org_id = 36;
     string org_name = 37;
-
+    bool debug_mode = 41;
 
     // The services that will run at initialization. Note this is not
     // set in the config file by the user but is propagated from the

@@ -3,7 +3,7 @@ package ntfs
 // This is an accessor which represents an NTFS filesystem
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+   Copyright (C) 2019-2024 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -74,6 +74,10 @@ func (self *NTFSFileInfo) Data() *ordereddict.Dict {
 
 func (self *NTFSFileInfo) Name() string {
 	return self.info.Name
+}
+
+func (self *NTFSFileInfo) UniqueName() string {
+	return self._full_path.String()
 }
 
 func (self *NTFSFileInfo) Mode() os.FileMode {

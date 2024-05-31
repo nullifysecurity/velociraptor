@@ -26,18 +26,18 @@ import { withRouter }  from "react-router-dom";
 
 import SplitPane from 'react-split-pane';
 
-const presetFilters = [
+const presetFilters = ()=>[
     {value: "type:CLIENT", label: T("Client Artifacts")},
     {value: "type:SERVER", label: T("Server Artifacts")},
+    {value: "type:NOTEBOOK", label: T("Notebook templates")},
     {value: "", label: T("All Artifacts")},
     {value: "precondition:WINDOWS", label: T("Windows Only")},
     {value: "precondition:LINUX", label: T("Linux Only")},
-    {value: "precondition:DARWIN", label: T("OSX Only")},
+    {value: "precondition:DARWIN", label: T("macOS Only")},
     {value: "type:CLIENT_EVENT", label: T("Client Monitoring")},
-    {value: "type:SERVER_EVENT", label: T("Servr Monitoring")},
+    {value: "type:SERVER_EVENT", label: T("Server Monitoring")},
     {value: "tool:.+", label: T("Using Tools")},
     {value: "^exchange.+", label: T("Exchange")},
-    {value: "^custom.+", label: T("Custom")},
     {value: "builtin:yes", label: T("BuiltIn Only")},
     {value: "builtin:no", label: T("Custom Only")},
 ];
@@ -257,13 +257,13 @@ class ArtifactInspector extends React.Component {
     }
 
     renderFilter = ()=>{
-        let option_value = _.filter(presetFilters, x=>{
+        let option_value = _.filter(presetFilters(), x=>{
             return x.label === this.state.filter_name;
         });
         return <Select
                  className="org-selector artifact-filter"
                  classNamePrefix="velo"
-                 options={presetFilters}
+                 options={presetFilters()}
                  value={option_value}
                  onChange={x=>{
                      this.setState({
@@ -276,10 +276,25 @@ class ArtifactInspector extends React.Component {
                />;
     }
 
+    getItemIcon = item=>{
+        if (!item.built_in && !item.is_inherited) {
+            return <FontAwesomeIcon icon="user-edit" /> ;
+        }
+
+        if (!item.built_in && item.is_inherited) {
+            return <FontAwesomeIcon icon="house" /> ;
+        }
+
+        return <span className="invisible">
+                 <FontAwesomeIcon icon="user-edit" />
+               </span>;
+    };
+
     render() {
         let selected = this.state.selectedDescriptor && this.state.selectedDescriptor.name;
         let deletable = this.state.selectedDescriptor &&
-            !this.state.selectedDescriptor.built_in;
+            !this.state.selectedDescriptor.built_in &&
+            !this.state.selectedDescriptor.is_inherited;
 
         return (
             <div className="full-width-height"><Spinner loading={this.state.loading}/>
@@ -443,11 +458,8 @@ class ArtifactInspector extends React.Component {
                                                className="link-button"
                                                onClick={e=>this.onSelect(item, e)}>
                                          {item.name}
-                                         <span className={classNames({
-                                             "built-in-icon": true,
-                                             "invisible": item.built_in,
-                                         })}>
-                                           <FontAwesomeIcon icon="user-edit" />
+                                         <span className="built-in-icon">
+                                           { this.getItemIcon(item) }
                                          </span>
                                        </button>
 

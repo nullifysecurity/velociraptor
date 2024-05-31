@@ -84,12 +84,12 @@ import (
 	"github.com/gorilla/csrf"
 	acl_proto "www.velocidex.com/golang/velociraptor/acls/proto"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
-	utils "www.velocidex.com/golang/velociraptor/api/utils"
+	api_utils "www.velocidex.com/golang/velociraptor/api/utils"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/constants"
 	"www.velocidex.com/golang/velociraptor/json"
 	"www.velocidex.com/golang/velociraptor/services"
-	"www.velocidex.com/golang/velociraptor/users"
+	"www.velocidex.com/golang/velociraptor/utils"
 )
 
 var (
@@ -112,12 +112,13 @@ func (self *CertAuthenticator) AddHandlers(mux *http.ServeMux) error {
 
 // It is not really possible to log off when using client certs
 func (self *CertAuthenticator) AddLogoff(mux *http.ServeMux) error {
-	mux.Handle(utils.Join(self.base, "/app/logoff.html"),
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
-			http.Error(w, "authorization failed", http.StatusUnauthorized)
-			return
-		}))
+	mux.Handle(api_utils.Join(self.base, "/app/logoff.html"),
+		IpFilter(self.config_obj,
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
+				http.Error(w, "authorization failed", http.StatusUnauthorized)
+				return
+			})))
 
 	return nil
 }
@@ -165,11 +166,12 @@ func (self *CertAuthenticator) AuthenticateUserHandler(
 		}
 
 		users_manager := services.GetUserManager()
-		user_record, err := users_manager.GetUser(r.Context(), username)
+		user_record, err := users_manager.GetUser(r.Context(), username, username)
 		if err != nil {
-			if err != services.UserNotFoundError || len(self.default_roles) == 0 {
+			if errors.Is(err, utils.NotFoundError) ||
+				len(self.default_roles) == 0 {
 				http.Error(w,
-					fmt.Sprintf("authorization failed: %v", err),
+					fmt.Sprintf("authorization failed for %v: %v", username, err),
 					http.StatusUnauthorized)
 				return
 			}
@@ -186,8 +188,8 @@ func (self *CertAuthenticator) AuthenticateUserHandler(
 
 			// Use the super user principal to actually add the
 			// username so we have enough permissions.
-			err = users.AddUserToOrg(r.Context(), users.AddNewUser,
-				constants.PinnedServerName, username,
+			err = users_manager.AddUserToOrg(r.Context(), services.AddNewUser,
+				utils.GetSuperuserName(self.config_obj), username,
 				[]string{"root"}, policy)
 			if err != nil {
 				http.Error(w,
@@ -195,13 +197,21 @@ func (self *CertAuthenticator) AuthenticateUserHandler(
 					http.StatusUnauthorized)
 				return
 			}
+
+			user_record, err = users_manager.GetUser(r.Context(), username, username)
+			if err != nil {
+				http.Error(w,
+					fmt.Sprintf("Failed creating user for %v: %v", username, err),
+					http.StatusUnauthorized)
+				return
+			}
 		}
 
 		// Does the user have access to the specified org?
-		err = CheckOrgAccess(r, user_record)
+		err = CheckOrgAccess(self.config_obj, r, user_record)
 		if err != nil {
 			services.LogAudit(r.Context(),
-				self.config_obj, username, "Unauthorized username",
+				self.config_obj, user_record.Name, "Unauthorized username",
 				ordereddict.NewDict().
 					Set("remote", r.RemoteAddr).
 					Set("status", http.StatusUnauthorized))
@@ -216,7 +226,7 @@ func (self *CertAuthenticator) AuthenticateUserHandler(
 		// build a token to pass to the underlying GRPC
 		// service with metadata about the user.
 		user_info := &api_proto.VelociraptorUser{
-			Name: username,
+			Name: user_record.Name,
 		}
 
 		// Must use json encoding because grpc can not handle

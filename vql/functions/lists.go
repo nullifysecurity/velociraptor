@@ -1,26 +1,25 @@
 /*
-   Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+Velociraptor - Dig Deeper
+Copyright (C) 2019-2024 Rapid7 Inc.
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published
-   by the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package functions
 
 import (
 	"context"
 	"reflect"
-	"regexp"
 	"strings"
 
 	"github.com/Velocidex/ordereddict"
@@ -89,6 +88,7 @@ func flatten(ctx context.Context, scope vfilter.Scope, a vfilter.Any, depth int)
 func (self *ArrayFunction) Call(ctx context.Context,
 	scope vfilter.Scope,
 	args *ordereddict.Dict) vfilter.Any {
+	defer vql_subsystem.RegisterMonitor("flatten", args)()
 	return flatten(ctx, scope, args, 0)
 }
 
@@ -109,7 +109,7 @@ type JoinFunction struct{}
 func (self *JoinFunction) Call(ctx context.Context,
 	scope vfilter.Scope,
 	args *ordereddict.Dict) vfilter.Any {
-
+	defer vql_subsystem.RegisterMonitor("join", args)()
 	arg := &JoinFunctionArgs{}
 	err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
 	if err != nil {
@@ -129,15 +129,16 @@ func (self JoinFunction) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) *v
 }
 
 type FilterFunctionArgs struct {
-	List      []vfilter.Any `vfilter:"required,field=list,doc=A list of items to filter"`
-	Regex     []string      `vfilter:"optional,field=regex,doc=A regex to test each item"`
-	Condition string        `vfilter:"optional,field=condition,doc=A VQL lambda to use to filter elements"`
+	List      []vfilter.Any   `vfilter:"required,field=list,doc=A list of items to filter"`
+	Regex     string          `vfilter:"optional,field=regex,doc=A regex to test each item"`
+	Condition *vfilter.Lambda `vfilter:"optional,field=condition,doc=A VQL lambda to use to filter elements"`
 }
 type FilterFunction struct{}
 
 func (self *FilterFunction) Call(ctx context.Context,
 	scope vfilter.Scope,
 	args *ordereddict.Dict) vfilter.Any {
+	defer vql_subsystem.RegisterMonitor("filter", args)()
 	arg := &FilterFunctionArgs{}
 	err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
 	if err != nil {
@@ -145,50 +146,26 @@ func (self *FilterFunction) Call(ctx context.Context,
 		return &vfilter.Null{}
 	}
 
-	res := []*regexp.Regexp{}
-	for _, re := range arg.Regex {
-		r, err := regexp.Compile("(?i)" + re)
-		if err != nil {
-			scope.Log("filter: Unable to compile regex %s", re)
-			return false
+	if arg.Condition != nil {
+		if arg.Regex != "" {
+			scope.Log("ERROR:filter: Both regex and condition are specified - Will only use the condition and ignore regex!")
 		}
-		res = append(res, r)
-	}
 
-	var lambda *vfilter.Lambda
-	if arg.Condition != "" {
-		lambda, err = vfilter.ParseLambda(arg.Condition)
-		if err != nil {
-			scope.Log("filter: Unable to compile lambda %s", arg.Condition)
-			return false
-		}
-	}
-
-	matcher := func(item vfilter.Any) bool {
-		str, ok := item.(string)
-		if ok {
-			for _, regex := range res {
-				if regex.MatchString(str) {
-					return true
-				}
+		result := []types.Any{}
+		for _, item := range arg.List {
+			if scope.Bool(arg.Condition.Reduce(ctx, scope, []vfilter.Any{item})) {
+				result = append(result, item)
 			}
-			return false
 		}
-
-		if lambda != nil {
-			return scope.Bool(lambda.Reduce(ctx, scope, []types.Any{item}))
-
-		}
-		return false
+		return result
 	}
 
 	result := []types.Any{}
 	for _, item := range arg.List {
-		if matcher(item) {
+		if scope.Match(arg.Regex, item) {
 			result = append(result, item)
 		}
 	}
-
 	return result
 }
 
@@ -208,6 +185,7 @@ type LenFunction struct{}
 func (self *LenFunction) Call(ctx context.Context,
 	scope vfilter.Scope,
 	args *ordereddict.Dict) vfilter.Any {
+	defer vql_subsystem.RegisterMonitor("len", args)()
 	arg := &LenFunctionArgs{}
 	err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
 	if err != nil {
@@ -259,10 +237,13 @@ type SliceFunction struct{}
 func (self *SliceFunction) Call(ctx context.Context,
 	scope vfilter.Scope,
 	args *ordereddict.Dict) vfilter.Any {
+
+	defer vql_subsystem.RegisterMonitor("slice", args)()
+
 	arg := &SliceFunctionArgs{}
 	err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
 	if err != nil {
-		scope.Log("len: %s", err.Error())
+		scope.Log("slice: %s", err.Error())
 		return &vfilter.Null{}
 	}
 

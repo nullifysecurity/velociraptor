@@ -1,19 +1,19 @@
 /*
-   Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+Velociraptor - Dig Deeper
+Copyright (C) 2019-2024 Rapid7 Inc.
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published
-   by the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package authenticators
 
@@ -74,8 +74,10 @@ func (self *GoogleAuthenticator) ProviderName() string {
 }
 
 func (self *GoogleAuthenticator) AddHandlers(mux *http.ServeMux) error {
-	mux.Handle(self.LoginHandler(), self.oauthGoogleLogin())
-	mux.Handle(self.CallbackHandler(), self.oauthGoogleCallback())
+	mux.Handle(self.LoginHandler(),
+		IpFilter(self.config_obj, self.oauthGoogleLogin()))
+	mux.Handle(self.CallbackHandler(),
+		IpFilter(self.config_obj, self.oauthGoogleCallback()))
 	return nil
 }
 
@@ -242,7 +244,7 @@ func (self *GoogleAuthenticator) getUserDataFromGoogle(
 
 func installLogoff(config_obj *config_proto.Config, mux *http.ServeMux) {
 	base := utils.GetBasePath(config_obj)
-	mux.Handle(utils.Join(base, "/app/logoff.html"),
+	mux.Handle(utils.Join(base, "/app/logoff.html"), IpFilter(config_obj,
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			params := r.URL.Query()
 			old_username, ok := params["username"]
@@ -264,7 +266,7 @@ func installLogoff(config_obj *config_proto.Config, mux *http.ServeMux) {
 			})
 
 			renderLogoffMessage(config_obj, w, username)
-		}))
+		})))
 }
 
 func authenticateUserHandle(
@@ -286,16 +288,16 @@ func authenticateUserHandle(
 
 		// Now check if the user is allowed to log in.
 		users := services.GetUserManager()
-		user_record, err := users.GetUser(r.Context(), username)
-		if err != nil || user_record.Name != username {
+		user_record, err := users.GetUser(r.Context(), username, username)
+		if err != nil {
 			reject_cb(w, r, errors.New("Invalid user"), username)
 			return
 		}
 
 		// Does the user have access to the specified org?
-		err = CheckOrgAccess(r, user_record)
+		err = CheckOrgAccess(config_obj, r, user_record)
 		if err != nil {
-			reject_cb(w, r, errors.New("Insufficient permissions"), username)
+			reject_cb(w, r, errors.New("Insufficient permissions"), user_record.Name)
 			return
 		}
 
@@ -303,7 +305,7 @@ func authenticateUserHandle(
 		// build a token to pass to the underlying GRPC
 		// service with metadata about the user.
 		user_info := &api_proto.VelociraptorUser{
-			Name:    username,
+			Name:    user_record.Name,
 			Picture: claims.Picture,
 		}
 
@@ -331,14 +333,17 @@ func reject_with_username(
 	w http.ResponseWriter, r *http.Request,
 	err error, username, login_url, provider string) {
 
-	// Log into the audit log.
-	services.LogAudit(r.Context(),
-		config_obj, username, "User rejected by GUI",
-		ordereddict.NewDict().
-			Set("remote", r.RemoteAddr).
-			Set("method", r.Method).
-			Set("url", r.URL.String()).
-			Set("err", err.Error()))
+	// Log failed login to the audit log only if there is an actual
+	// user. First redirect will have username blank.
+	if username != "" {
+		services.LogAudit(r.Context(),
+			config_obj, username, "User rejected by GUI",
+			ordereddict.NewDict().
+				Set("remote", r.RemoteAddr).
+				Set("method", r.Method).
+				Set("url", r.URL.String()).
+				Set("err", err.Error()))
+	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)

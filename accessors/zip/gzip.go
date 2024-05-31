@@ -1,6 +1,6 @@
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+   Copyright (C) 2019-2024 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -282,7 +282,7 @@ func GetGzipFile(full_path *accessors.OSPath, scope vfilter.Scope) (ReaderStat, 
 
 	accessor, err := accessors.GetAccessor(pathspec.DelegateAccessor, scope)
 	if err != nil {
-		scope.Log("%v: did you provide a URL or PathSpec?", err)
+		scope.Log("%v: did you provide a PathSpec?", err)
 		return nil, err
 	}
 

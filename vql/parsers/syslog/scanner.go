@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"io"
+	"os"
 
 	"github.com/Velocidex/ordereddict"
 	"github.com/dimchansky/utfbom"
@@ -42,6 +43,7 @@ func (self ScannerPlugin) Call(
 
 	go func() {
 		defer close(output_chan)
+		defer vql_subsystem.RegisterMonitor("parse_lines", args)()
 
 		arg := &ScannerPluginArgs{}
 		err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
@@ -94,9 +96,9 @@ func (self ScannerPlugin) Call(
 	return output_chan
 }
 
-type _WatchSyslogPlugin struct{}
+type WatchSyslogPlugin struct{}
 
-func (self _WatchSyslogPlugin) Call(
+func (self WatchSyslogPlugin) Call(
 	ctx context.Context,
 	scope vfilter.Scope,
 	args *ordereddict.Dict) <-chan vfilter.Row {
@@ -104,6 +106,7 @@ func (self _WatchSyslogPlugin) Call(
 
 	go func() {
 		defer close(output_chan)
+		defer vql_subsystem.RegisterMonitor("watch_syslog", args)()
 
 		arg := &ScannerPluginArgs{}
 		err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
@@ -160,7 +163,7 @@ func (self _WatchSyslogPlugin) Call(
 	return output_chan
 }
 
-func (self _WatchSyslogPlugin) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) *vfilter.PluginInfo {
+func (self WatchSyslogPlugin) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) *vfilter.PluginInfo {
 	return &vfilter.PluginInfo{
 		Name:     "watch_syslog",
 		Doc:      "Watch a syslog file and stream events from it. ",
@@ -182,17 +185,31 @@ func maybeOpenGzip(scope vfilter.Scope,
 		return nil, err
 	}
 
+	// If the fd is not seekable we can not try to open as a gzip
+	// file.
+	if !accessors.IsSeekable(fd) {
+		return fd, nil
+	}
+
 	zr, err := gzip.NewReader(fd)
 	if err == nil {
 		return zr, nil
 	}
 
+	// Rewind the file back if we can
+	off, err := fd.Seek(0, os.SEEK_SET)
+	if err == nil && off == 0 {
+		return fd, nil
+	}
+
+	// We can not rewind it - force the file to reopen. This is more
+	// expensive but should restore the file to the correct state.
 	fd.Close()
 
 	return accessor.OpenWithOSPath(filename)
 }
 
 func init() {
-	vql_subsystem.RegisterPlugin(&_WatchSyslogPlugin{})
+	vql_subsystem.RegisterPlugin(&WatchSyslogPlugin{})
 	vql_subsystem.RegisterPlugin(&ScannerPlugin{})
 }

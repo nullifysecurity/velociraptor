@@ -7,6 +7,8 @@ import (
 
 	"github.com/go-errors/errors"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
+	constants "www.velocidex.com/golang/velociraptor/constants"
+	"www.velocidex.com/golang/velociraptor/services/writeback"
 	"www.velocidex.com/golang/velociraptor/utils"
 )
 
@@ -31,11 +33,6 @@ func ValidateClientConfig(config_obj *config_proto.Config) error {
 		return errors.New("No Client.server_urls configured")
 	}
 
-	_, err := WritebackLocation(config_obj.Client)
-	if err != nil {
-		return err
-	}
-
 	// Add defaults
 	if config_obj.Logging == nil {
 		config_obj.Logging = &config_proto.LoggingConfig{}
@@ -50,10 +47,6 @@ func ValidateClientConfig(config_obj *config_proto.Config) error {
 
 	if config_obj.Client.MaxPoll == 0 {
 		config_obj.Client.MaxPoll = 60 // One minute
-	}
-
-	if config_obj.Client.PinnedServerName == "" {
-		config_obj.Client.PinnedServerName = "VelociraptorServer"
 	}
 
 	if config_obj.Client.MaxUploadSize == 0 {
@@ -74,8 +67,10 @@ func ValidateClientConfig(config_obj *config_proto.Config) error {
 	config_obj.Version = GetVersion()
 	config_obj.Client.Version = config_obj.Version
 
-	writeback, err := GetWriteback(config_obj.Client)
-	if err == nil {
+	// Ensure the writeback service is configured.
+	writeback_service := writeback.GetWritebackService()
+	writeback, err := writeback_service.GetWriteback(config_obj)
+	if err == nil && writeback.InstallTime != 0 {
 		config_obj.Client.Version.InstallTime = writeback.InstallTime
 	}
 
@@ -151,7 +146,7 @@ func ValidateFrontendConfig(config_obj *config_proto.Config) error {
 	}
 
 	if config_obj.API.PinnedGwName == "" {
-		config_obj.API.PinnedGwName = "GRPC_GW"
+		config_obj.API.PinnedGwName = constants.PinnedGwName
 	}
 
 	return nil

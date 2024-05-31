@@ -52,7 +52,9 @@ sources:
             SELECT * FROM foreach(row={
               SELECT *,
                      get(member='EventData') AS EventData
-              FROM watch_etw(guid='{5770385f-c22a-43e0-bf4c-06f5698ffbd9}')
+              FROM watch_etw(
+                guid='{5770385f-c22a-43e0-bf4c-06f5698ffbd9}',
+                description='Microsoft-Windows-Sysmon/Operational')
             }, query={
               SELECT * FROM switch(
               start={
@@ -115,6 +117,7 @@ sources:
               FROM pslist()
 
       LET Tracker <= process_tracker(
+         max_size=MaxSize,
          enrichments=if(condition=AddEnrichments, then=[
            '''x=>if(
                 condition=NOT x.Data.VersionInformation AND x.Data.Image,

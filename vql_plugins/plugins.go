@@ -1,6 +1,6 @@
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2022 Rapid7 Inc.
+   Copyright (C) 2019-2024 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -38,7 +38,9 @@ import (
 	_ "www.velocidex.com/golang/velociraptor/vql/parsers/syslog"
 	_ "www.velocidex.com/golang/velociraptor/vql/parsers/usn"
 	_ "www.velocidex.com/golang/velociraptor/vql/protocols"
+	_ "www.velocidex.com/golang/velociraptor/vql/sigma"
 	_ "www.velocidex.com/golang/velociraptor/vql/tools"
 	_ "www.velocidex.com/golang/velociraptor/vql/tools/collector"
+	_ "www.velocidex.com/golang/velociraptor/vql/tools/logscale"
 	_ "www.velocidex.com/golang/velociraptor/vql/tools/process"
 )

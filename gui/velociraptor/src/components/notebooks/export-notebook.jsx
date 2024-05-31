@@ -46,6 +46,7 @@ export default class ExportNotebook extends React.Component {
 
     fetchNotebookDetails = () => {
         api.get("v1/GetNotebooks", {
+            include_uploads: true,
             notebook_id: this.props.notebook.notebook_id,
         }, this.source.token).then(resp=>{
             let items = resp.data.items;
@@ -107,7 +108,7 @@ export default class ExportNotebook extends React.Component {
             {dataField: "name", text: T("Name"),
              sort: true, filtered: true, formatter: this.getDownloadLink},
             {dataField: "size", text: T("Size")},
-            {dataField: "date", text: T("Date"), type: "timestamp"},
+            {dataField: "stats.timestamp", text: T("Date"), type: "timestamp"},
         ]);
 
         return (

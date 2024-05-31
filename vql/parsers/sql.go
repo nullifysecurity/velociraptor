@@ -12,6 +12,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
+	"www.velocidex.com/golang/velociraptor/accessors"
 	"www.velocidex.com/golang/velociraptor/acls"
 	utils "www.velocidex.com/golang/velociraptor/utils"
 	"www.velocidex.com/golang/velociraptor/vql"
@@ -20,13 +21,17 @@ import (
 	"www.velocidex.com/golang/vfilter/arg_parser"
 )
 
+var (
+	notValidDatabase = errors.New("Not a valid database")
+)
+
 type SQLPluginArgs struct {
-	Driver     string      `vfilter:"required,field=driver, doc=sqlite, mysql,or postgres"`
-	ConnString string      `vfilter:"optional,field=connstring, doc=SQL Connection String"`
-	Filename   string      `vfilter:"optional,field=file, doc=Required if using sqlite driver"`
-	Accessor   string      `vfilter:"optional,field=accessor,doc=The accessor to use if using sqlite"`
-	Query      string      `vfilter:"required,field=query"`
-	Args       vfilter.Any `vfilter:"optional,field=args"`
+	Driver     string            `vfilter:"required,field=driver, doc=sqlite, mysql,or postgres"`
+	ConnString string            `vfilter:"optional,field=connstring, doc=SQL Connection String"`
+	Filename   *accessors.OSPath `vfilter:"optional,field=file, doc=Required if using sqlite driver"`
+	Accessor   string            `vfilter:"optional,field=accessor,doc=The accessor to use if using sqlite"`
+	Query      string            `vfilter:"required,field=query"`
+	Args       vfilter.Any       `vfilter:"optional,field=args"`
 }
 
 type SQLPlugin struct{}
@@ -88,6 +93,7 @@ func (self SQLPlugin) Call(
 	go func() {
 		defer close(output_chan)
 		defer utils.RecoverVQL(scope)
+		defer vql_subsystem.RegisterMonitor("sql", args)()
 
 		arg := &SQLPluginArgs{}
 		err := arg_parser.ExtractArgsWithContext(ctx, scope, args, arg)
@@ -115,6 +121,10 @@ func (self SQLPlugin) Call(
 			}
 
 			handle, err = GetHandleSqlite(ctx, arg, scope)
+			if err == notValidDatabase {
+				return
+			}
+
 			if err != nil {
 				scope.Log("sql: %s", err)
 				return
